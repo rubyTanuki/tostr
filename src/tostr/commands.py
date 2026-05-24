@@ -1,17 +1,14 @@
 import asyncio
 import os
 import shutil
-import time
-import json
 from pathlib import Path
-from typing import Annotated
 from watchfiles import awatch, Change
 from loguru import logger
 
-from tostr.llm import GeminiClient
+from tostr.llm import LLMClient, GeminiStrategy
 from tostr.core import Registry, tost, Verbosity, BaseParser, SQLiteCache, BaseCodeStruct
 
-from tostr.exceptions import APIKeyError, StructNotFoundError, ResolveError, DatabaseNotFoundError, TargetFileNotFoundError
+from tostr.exceptions import APIKeyError, StructNotFoundError, DatabaseNotFoundError
 
 def _verify_db_exists(target_path: Path):
     if not os.path.exists(target_path):
@@ -22,7 +19,8 @@ def get_llm_client():
     if GEMINI_API_KEY is None:
         raise APIKeyError("API key not found.")
     
-    return GeminiClient(api_key=GEMINI_API_KEY)
+    strategy = GeminiStrategy(api_key=GEMINI_API_KEY)
+    return LLMClient(strategy=strategy)
 
 def clean_db(target_path: Path):
     if os.path.exists(target_path / ".tostr"):
@@ -149,7 +147,7 @@ async def watch_async(target_path: Path):
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("\n🛑 Stopping listener...")
 
-async def process_single_file(project_dir: Path, filepath: Path, llm_client: GeminiClient):
+async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient):
     logger.info(f"Processing file {filepath}")
     try:
         db = SQLiteCache(project_dir / ".tostr" / "cache.db")

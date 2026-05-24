@@ -1,15 +1,10 @@
 import asyncio
-import os
 import time
-import json
 from pathlib import Path
 import typer
 from typing import Annotated
 from loguru import logger
-from threading import Thread
 
-from tostr.llm import GeminiClient
-from tostr.core import Registry, tost, Verbosity
 from tostr.exceptions import ToasterError
 
 from tostr.commands import init_async, inspect_async, skeleton_async, watch_async, clean_db

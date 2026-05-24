@@ -1,11 +1,8 @@
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
-from typing import Set, List, Dict, Any, Optional, TYPE_CHECKING, ClassVar
-import re
+from typing import Set, List, Dict, Optional, TYPE_CHECKING, ClassVar
 import json
-import asyncio
 import hashlib
-from importlib import import_module
 from pathlib import Path
 
 from loguru import logger
@@ -358,40 +355,20 @@ class BaseClass(BaseCodeStruct):
         if not self.registry:
             raise ValueError("Registry reference is required for description resolution.")
         try:
-            # TODO: move the imports reference into llm.generate_description
-            response_obj = await llm.generate_description(self, self.imports)
+            response_obj = await llm.describe_class(self, self.imports)
         except Exception as e:
             logger.error(f"Failed to generate description for {self.uid}: {e}")
             return
             
-        try:
-            if not response_obj or response_obj.get("status") == "error":
-                error_msg = response_obj.get('error') if response_obj else 'Returned None in'
-                logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure: {error_msg}")
-                return
-            try:
-                self.description = response_obj["description"]
-            except KeyError:
-                logger.warning(f"⚠️ Missing description for {self.uid} in LLM response")
-                return
-            
-            try:
-                returned_methods = {child['uid']: child for child in response_obj.get("methods", [])}
-            except KeyError:
-                logger.warning(f"⚠️ Missing methods for {self.uid} in LLM response or failed to index by 'uid'")
-                logger.debug(f"LLM response for {self.uid}: {response_obj}")
-                return
-            
-            for child_set in self.children.values():
-                for child in child_set:
-                    if child.uid in returned_methods.keys():
-                        if not "description" in returned_methods[child.uid]:
-                            logger.warning(f"⚠️ Missing description for {child.uid} in LLM response for {self.uid}")
-                            continue
-                        child.description = returned_methods[child.uid].get("description")
-                        # self.registry.update_struct_description(child)
-        except Exception as e:
-            logger.error(f"Failed to generate description for {self.uid}: {e}")
+        if not response_obj or response_obj.status == "error":
+            error_msg = response_obj.error if response_obj else 'Returned None'
+            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure: {error_msg}")
+            return
+
+        if response_obj.description:
+            self.description = response_obj.description
+        else:
+            logger.warning(f"⚠️ Missing description for {self.uid} in LLM response")
             
     def to_dict(self) -> dict:
         data = super().to_dict()
@@ -406,7 +383,7 @@ class BaseMethod(BaseCodeStruct):
     _IDPREFIX: ClassVar[str] = "M"
     
     arity: int = 0
-    dependency_names: Optional[List[(str, int)]] = field(default_factory=list)
+    dependency_names: Optional[List[tuple[str, int]]] = field(default_factory=list)
     
     children: dict = field(init=False, repr=False, default_factory=dict)
     

@@ -14,7 +14,7 @@ from tostr.commands import (
     watch_async,
     clean_db
 )
-from tostr.core.utils.logger import configure_mcp_logging, configure_cli_logging
+from tostr.core.utils.logger import configure_mcp_logging
 
 _is_initialized = False
 _current_project_dir = None

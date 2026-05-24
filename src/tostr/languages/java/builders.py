@@ -1,6 +1,5 @@
 from tree_sitter import Parser, Node, Query, QueryCursor
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from tostr.core.registry import Registry
 from tostr.languages.java.language import JAVA_LANGUAGE
