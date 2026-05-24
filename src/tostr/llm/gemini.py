@@ -13,7 +13,7 @@ class DescriptionResult(BaseModel):
     methods: list[MethodDescription] = Field(description="List of method information")
 
 class GeminiStrategy(LLMStrategy):
-    def __init__(self, api_key: str, model_name: str = "gemini-2.0-flash-lite", max_concurrent_requests: int = 200):
+    def __init__(self, api_key: str, model_name: str = "gemini-3.1-flash-lite", max_concurrent_requests: int = 200):
         super().__init__(api_key, model_name, max_concurrent_requests)
         self.client = genai.Client(api_key=api_key)
 
@@ -35,11 +35,11 @@ class GeminiStrategy(LLMStrategy):
             parsed_data = response.parsed
             
             # Map DescriptionResult to LLMResponse
-            description_map = {m.method_id: m.description for m in parsed_data.methods}
+            description_map = {int(m.get("method_id")): m.get("description") for m in parsed_data.get("methods", []) if m.get("method_id") is not None}
             
             return LLMResponse(
-                uid=parsed_data.uid,
-                description=parsed_data.description,
+                uid=parsed_data.get("uid", ""),
+                description=parsed_data.get("description", ""),
                 description_map=description_map,
                 status="success"
             )
