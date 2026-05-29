@@ -23,3 +23,9 @@ __pycache__/
 
 *.log
 *.tmp
+*.json
+*.md
+*.kts
+*.properties
+*.xml
+*.gradle

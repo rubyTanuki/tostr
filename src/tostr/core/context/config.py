@@ -21,7 +21,13 @@ class ProjectConfig:
         '.svn/',
         '.hg/',
         '.tostr/',
-        '.tostrignore'
+        '.tostrignore',
+        '*.json',
+        '*.md',
+        '*.kts',
+        '*.properties',
+        '*.xml',
+        '*.gradle'
     ]
 
     def __init__(self, project_path: Path):

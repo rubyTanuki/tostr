@@ -5,7 +5,7 @@ from loguru import logger
 
 import textwrap
 
-_INDENT_TAB = "   "
+_INDENT_TAB = "  "
 
 _LINE_WRAP_WIDTH = 120
 

@@ -72,3 +72,10 @@ out/
 
 # VS Code
 .vscode/
+
+*.json
+*.md
+*.kts
+*.properties
+*.xml
+*.gradle
