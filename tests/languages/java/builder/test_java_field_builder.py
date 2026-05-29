@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from tree_sitter import Parser
 from tostr.languages.java.language import JAVA_LANGUAGE
 from tostr.core.registry import Registry
-from tostr.core.models import BaseClass, BaseField
+from tostr.core.models import BaseFile, BaseClass, BaseField
 from tostr.languages.java.builders import JavaFieldBuilder
 
 @pytest.fixture(scope="session")
@@ -22,10 +22,12 @@ def mock_registry():
 @pytest.fixture
 def mock_parent_class():
     """Mocks the BaseClass parent needed for UID generation."""
-    mock_cls = MagicMock(spec=BaseClass)
-    mock_cls.uid = "src/main/java/com/tostr/Constants.java#Constants"
-    mock_cls.path = Path("src/main/java/com/tostr/Constants.java")
-    mock_cls.__class__ = BaseClass 
+    mock_cls = MagicMock(
+        spec=BaseClass,
+        uid="com.example.TestClass",
+        name="TestClass",
+        parent=MagicMock(spec=BaseFile, uid="com/tostr/Constants.java", package="com.tostr")
+    )
     return mock_cls
 
 def test_java_field_builder_extracts_fields(java_parser, mock_registry, mock_parent_class):
@@ -44,7 +46,7 @@ def test_java_field_builder_extracts_fields(java_parser, mock_registry, mock_par
     # Find the field nodes inside the class body
     field_nodes = []
     class_node = tree.root_node.children[0]
-    body_node = class_node.child_by_field_name('body')
+    body_node = class_node.child_by_field_name("body")
     
     for child in body_node.children:
         if child.type == "field_declaration":
@@ -65,12 +67,12 @@ def test_java_field_builder_extracts_fields(java_parser, mock_registry, mock_par
     
     # Signature Tests (Ensuring the comment was skipped and order is correct)
     expected_tau_sig = "@Serialized public static final double TAU"
-    assert tau_field.signature == expected_tau_sig, f"Expected '{expected_tau_sig}', got '{tau_field.signature}'"
+    assert tau_field.signature == expected_tau_sig, f"Expected \'{expected_tau_sig}\\' , got \'{tau_field.signature}\'"
     assert "This comment should be ignored" not in tau_field.signature
     
     # UID Test (Ensuring NO type information is appended to fields)
-    expected_tau_uid = "src/main/java/com/tostr/Constants.java#Constants.TAU"
-    assert tau_field.uid == expected_tau_uid, f"Expected '{expected_tau_uid}', got '{tau_field.uid}'"
+    expected_tau_uid = "com.example.TestClass.TAU"
+    assert tau_field.uid == expected_tau_uid, f"Expected \'{expected_tau_uid}\\' , got \'{tau_field.uid}\'"
 
 
     # --- TEST 2: The Generic Field ---
@@ -83,5 +85,5 @@ def test_java_field_builder_extracts_fields(java_parser, mock_registry, mock_par
     expected_users_sig = "private List<String> activeUsers"
     assert users_field.signature == expected_users_sig
     
-    expected_users_uid = "src/main/java/com/tostr/Constants.java#Constants.activeUsers"
+    expected_users_uid = "com.example.TestClass.activeUsers"
     assert users_field.uid == expected_users_uid

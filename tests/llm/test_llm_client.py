@@ -22,9 +22,9 @@ async def test_llm_client_data_flow():
     client = LLMClient(strategy)
     
     # Create a mock method
-    mock_method = MagicMock(spec=BaseMethod)
+    mock_method = MagicMock(spec=BaseMethod, uid="mock.method", name="method")
+    mock_method.parent = MagicMock(spec=BaseFile, imports=[]) # Mock the parent file
     mock_method.signature = "void test()"
-    mock_method.uid = "test_uid"
     mock_method.description = ""
     
     # Create a mock class
@@ -46,8 +46,7 @@ async def test_models_resolve_description_data_flow():
     Test the full data flow from BaseClass.resolve_description_async through LLMClient.
     """
     registry = MagicMock(spec=Registry)
-    parent_file = MagicMock(spec=BaseFile)
-    parent_file.imports = []
+    parent_file = MagicMock(spec=BaseFile, imports=[], package="com.example")
     
     # Create a real BaseClass instance
     cls = BaseClass(name="TestClass", uid="TestClass")
@@ -93,9 +92,12 @@ async def test_llm_client_retry_logic():
     strategy = RetryStrategy(api_key="test", model_name="test")
     client = LLMClient(strategy)
     
-    mock_class = MagicMock(spec=BaseClass)
-    mock_class.methods = []
-    mock_class.skeletonize.return_value = "code"
+    mock_class = MagicMock(
+        spec=BaseClass,
+        uid="mock.class",
+        methods=[],
+        skeletonize=MagicMock(return_value="code")
+    )
     
     # We need to mock asyncio.sleep to avoid waiting during tests
     with MagicMock() as mock_sleep:

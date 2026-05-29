@@ -23,9 +23,8 @@ def mock_registry():
 @pytest.fixture
 def mock_parent_file():
     """Mocks the BaseFile parent needed for UID generation."""
-    mock_file = MagicMock(spec=BaseFile)
-    mock_file.uid = "src/main/java/com/tostr/DataProcessor.java"
-    mock_file.path = Path("src/main/java/com/tostr/DataProcessor.java")
+    mock_file = MagicMock(spec=BaseFile, uid="com/tostr/DataProcessor.java", path=Path("src/main/java/com/tostr/DataProcessor.java"))
+    mock_file.package = "com.tostr"
     # Tell isinstance(parent, BaseFile) to return True
     mock_file.__class__ = BaseFile 
     return mock_file
@@ -65,7 +64,7 @@ def test_java_class_builder_extracts_complex_class(java_parser, mock_registry, m
 
     # 1. Test BaseStruct Properties
     assert class_obj.name == "DataProcessor"
-    assert class_obj.uid == "src/main/java/com/tostr/DataProcessor.java#DataProcessor"
+    assert class_obj.uid == f"{mock_parent_file.package}.DataProcessor"
     assert class_obj.parent == mock_parent_file
 
     # 2. Test Signature Extraction

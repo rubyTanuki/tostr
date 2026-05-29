@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 from pydantic import BaseModel, Field
@@ -64,6 +65,8 @@ Reference methods by their provided integer `method_id`.
         input_data_string = json.dumps(input_data)
 
         logger.debug(f"Generating Description for {class_obj.uid}...")
+
+        start_time = time.perf_counter()
         
         max_retries = 3
         base_delay = 2
@@ -86,6 +89,10 @@ Reference methods by their provided integer `method_id`.
                             except (ValueError, TypeError):
                                 continue
                     
+                    end_time = time.perf_counter()
+                    elapsed_time = end_time - start_time
+                    logger.debug(f"Finished describing {class_obj.uid} in {elapsed_time:.4f} seconds")
+
                     return result
                 except Exception as e:
                     error_str = str(e)

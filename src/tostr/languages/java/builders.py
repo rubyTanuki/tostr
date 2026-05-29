@@ -1,5 +1,6 @@
 from tree_sitter import Parser, Node, Query, QueryCursor
 from pathlib import Path
+import hashlib
 
 from tostr.core.registry import Registry
 from tostr.languages.java.language import JAVA_LANGUAGE
@@ -29,6 +30,7 @@ class JavaFileBuilder(BaseFileBuilder):
         with open(path, "rb") as f:
             body_bytes = f.read()
         file_obj.body = body_bytes.decode("utf-8")
+        file_obj.diff_hash = hashlib.md5(body_bytes).hexdigest() # Fallback until distributed hash is calculated
         
         parser = Parser(JAVA_LANGUAGE)
         tree = parser.parse(body_bytes)
@@ -136,6 +138,7 @@ class JavaClassBuilder(BaseClassBuilder):
             # BaseCodeStruct
             signature=signature,
             body=body,
+            diff_hash=hashlib.md5(node.text).hexdigest(),
             start_line=node.start_point[0],
             end_line=node.end_point[0],
             node=node,
@@ -257,6 +260,7 @@ class JavaMethodBuilder(BaseMethodBuilder):
             # BaseCodeStruct
             signature=signature,
             body=body,
+            diff_hash=hashlib.md5(node.text).hexdigest(),
             start_line=node.start_point[0],
             end_line=node.end_point[0],
             node=node,
@@ -315,6 +319,7 @@ class JavaFieldBuilder(BaseFieldBuilder):
             # BaseCodeStruct
             signature=signature,
             body=body,
+            diff_hash=hashlib.md5(node.text).hexdigest(),
             start_line=node.start_point[0],
             end_line=node.end_point[0],
             node=node,

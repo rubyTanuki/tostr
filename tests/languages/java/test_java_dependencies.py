@@ -29,8 +29,8 @@ def test_java_dependency_parsing(tmp_path, registry):
     method1 = [m for m in registry.methods if m.name == "method1"][0]
     
     # Verify dependency names and arities are parsed
-    assert ("method2", 0) in method1.dependency_names
-    assert ("method3", 2) in method1.dependency_names
+    assert ("method2", 0, None, False) in method1.dependency_names
+    assert ("method3", 2, None, False) in method1.dependency_names
 
 def test_java_dependency_resolution_local(tmp_path, registry):
     """Tests resolution of local method calls (same class)."""
@@ -98,4 +98,4 @@ def test_java_dependency_resolution_imported(tmp_path, registry):
     method_a = [m for m in registry.methods if m.name == "methodA"][0]
     
     # This tests the "IMPORTED" logic in BaseMethod.resolve_dependencies
-    assert method_a in method_b.outbound_dependencies
+    assert method_a.parent in method_b.outbound_dependencies

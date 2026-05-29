@@ -106,11 +106,6 @@ class BaseStruct(ABC):
         elif isinstance(self.parent, str):
             edges.add((self.id, self.parent, "is_child_of"))
         
-        # for child_set in self.children.values():
-        #     for child in child_set:
-        #         edges.update(child.edges)
-        #         edges.add((child.id, self.id, "contains"))
-        
         return edges
     
     @property 
@@ -143,6 +138,15 @@ class BaseStruct(ABC):
             logger.warning(f"Attempted to set parent of {self} to itself. Skipping to avoid circular reference.")
             return
         self.parent = parent
+
+    def calculate_distributed_hash(self):
+        """Calculates diff_hash based on direct children's hashes."""
+        if not self.all_children:
+            return
+            
+        child_hashes = sorted([child.diff_hash for child in self.all_children if getattr(child, "diff_hash", None)])
+        if child_hashes:
+            self.diff_hash = hashlib.md5("".join(child_hashes).encode("utf-8")).hexdigest()
     
     def add_dependency(self, target: "BaseStruct"):
         self.outbound_dependencies.add(target)
@@ -175,7 +179,6 @@ class BaseStruct(ABC):
     @classmethod
     def from_dict(cls, d: dict):
         data = d.copy()
-        # REMOVE all init=False here
         id = data.pop("id", None) 
         instance = cls(**data)
         if id:
@@ -213,6 +216,7 @@ class BaseStruct(ABC):
 @dataclass(eq=False)
 class Directory(BaseStruct):
     _IDPREFIX: ClassVar[str] = "D"
+    diff_hash: str = ""
     
     def __init__(self, path, registry=None, parent=None, uid=None):
         uid = uid or str(path)
@@ -233,11 +237,11 @@ class Directory(BaseStruct):
 
         for path in full_path.glob("*"):
             if self.registry.config.is_ignored(path):
-                logger.debug(f"Skipping '{path}' due to path ignore rules")
+                logger.debug(f"Skipping \'{path}\' due to path ignore rules")
                 continue
             else:
                 if path.is_dir():
-                    logger.debug(f"🔍 Parsing directory '{path}'")
+                    logger.debug(f"🔍 Parsing directory \'{path}\'")
                     relative_path = self.registry.relative_to_project(path)
                     directory = Directory(path=relative_path, registry=self.registry, parent=self)
                     self.registry.add_struct(directory)
@@ -247,18 +251,26 @@ class Directory(BaseStruct):
                     logger.debug(f"Attempting to resolve builder for suffix {path.parts[-1]}")
                     try:
                         if self.registry.config.is_ignored(path):
-                            logger.debug(f"Skipping '{path}' due to path ignore rules")
+                            logger.debug(f"Skipping \'{path}\' due to path ignore rules")
                             continue
                         builder = StructBuilderProvider.get_builder(path.suffix, self.registry)
                     except LanguageNotSupportedError as e:
                         continue
                     instance = builder.build_file().from_path(path, parent=self)
+                    
+                    # Calculate file hash from children if any exist
+                    instance.calculate_distributed_hash()
+
                     self.registry.add_struct(instance)
                     self.add_child(instance)
+        
+        # Calculate directory hash from its direct children
+        self.calculate_distributed_hash()
     
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "Directory"
+        data["diff_hash"] = self.diff_hash
         return data
 
 @dataclass(eq=False)
@@ -268,6 +280,7 @@ class BaseFile(BaseStruct):
     imports: List[str] = field(default_factory=list)
     package: str = ""
     body: str = ""
+    diff_hash: str = ""
     node: "Node" = None
     
     async def resolve_description_async(self, llm: "LLMClient", visited: set[str] = None):
@@ -279,8 +292,9 @@ class BaseFile(BaseStruct):
         data["type"] = "BaseFile"
         data["imports"] = self.imports
         data["body"] = self.body
+        data["diff_hash"] = self.diff_hash
         return data
-    
+
 @dataclass(eq=False) 
 class BaseCodeStruct(BaseStruct):
     
@@ -329,7 +343,7 @@ class BaseClass(BaseCodeStruct):
     def imports(self) -> List[str]:
         return self.parent.imports
     
-    def resolve_type(self, type_name: str) -> Optional[BaseStruct]:
+    def resolve_type(self, type_name: str) -> Optional["BaseStruct"]:
         """Resolves a simple or scoped type name to a struct using package and imports."""
         if not type_name: return None
         if type_name in self._type_cache:
@@ -340,7 +354,7 @@ class BaseClass(BaseCodeStruct):
         
         # 2. Same package
         if not dep:
-            package = getattr(self.parent, 'package', None) if isinstance(self.parent, BaseFile) else None
+            package = getattr(self.parent, "package", None) if isinstance(self.parent, BaseFile) else None
             if package:
                 dep = self.registry.get_struct_by_uid(f"{package}.{type_name}")
         
@@ -462,7 +476,7 @@ class BaseMethod(BaseCodeStruct):
     #     pass
     
     def resolve_dependencies(self):
-        logger.info(f"Resolving dependencies for method {self.uid}")
+        logger.debug(f"Resolving dependencies for method {self.uid}")
         for dep_info in self.dependency_names:
             # Handle both old (name, arity) and new (name, arity, receiver, is_creation) formats
             if len(dep_info) == 2:
@@ -483,7 +497,7 @@ class BaseMethod(BaseCodeStruct):
             search_scope = self.parent.children if self.parent else self.children
             for child_set in list(search_scope.values()):
                 for child in list(child_set):
-                    if child.name == name and getattr(child, 'arity', -1) == arity:
+                    if child.name == name and getattr(child, "arity", -1) == arity:
                         self.add_dependency(child)
                         resolved = True
                         break
@@ -512,7 +526,7 @@ class BaseMethod(BaseCodeStruct):
                 if self.parent._potential_parents_cache is None:
                     potential_parents = []
                     # Same package
-                    package = getattr(self.parent.parent, 'package', None) if isinstance(self.parent.parent, BaseFile) else None
+                    package = getattr(self.parent.parent, "package", None) if isinstance(self.parent.parent, BaseFile) else None
                     if package: potential_parents.append(f"{package}.*")
                     
                     # All imports

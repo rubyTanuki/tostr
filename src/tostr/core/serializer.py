@@ -21,6 +21,8 @@ class tost:
     def dump_skeleton(
         cls, 
         obj: "BaseStruct",
+        files_only: bool = True,
+        depth: int = 7,
         # indent: int = 0,
         pretty: bool = True
     ) -> str:
@@ -31,18 +33,27 @@ class tost:
         parts.append(header_str)
         
         if obj.files:
-            for f in obj.files:
-                parts.append(cls.dump_skeleton(f, pretty=pretty))
+            if depth == 0:
+                parts.append(f"{indent_str}... ({len(obj.files)} files)")
+            else:
+                for f in obj.files:
+                    parts.append(cls.dump_skeleton(f, files_only=files_only, depth=depth-1, pretty=pretty))
         if obj.directories:
-            for d in obj.directories:
-                if d is obj:
-                    logger.warning(f"Skipping dumping directory {d} as it is the same as its parent {obj}, likely to avoid circular reference.")
-                    continue
-                parts.append('\n' + cls.dump_skeleton(d, pretty=pretty))
-        if obj.classes:
-            for c in obj.classes:
-                parts.append(cls.dump_skeleton(c, pretty=pretty))
-                
+            if depth == 0:
+                parts.append(f"{indent_str}... ({len(obj.directories)} directories)")
+            else:
+                for d in obj.directories:
+                    if d is obj:
+                        logger.warning(f"Skipping dumping directory {d} as it is the same as its parent {obj}, likely to avoid circular reference.")
+                        continue
+                    parts.append(cls.dump_skeleton(d, files_only=files_only, depth=depth-1, pretty=pretty))
+        if obj.classes and not files_only:
+            if depth == 0:
+                parts.append(f"{indent_str}... ({len(obj.classes)} classes)")
+            else:
+                for c in obj.classes:
+                    parts.append(cls.dump_skeleton(c, files_only=files_only, depth=depth-1, pretty=pretty))
+
         return textwrap.indent("\n".join(parts), indent_str)
     
     @classmethod

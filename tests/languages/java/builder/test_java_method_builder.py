@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from tree_sitter import Parser
 from tostr.languages.java.language import JAVA_LANGUAGE
 from tostr.core.registry import Registry
-from tostr.core.models import BaseClass, BaseMethod
+from tostr.core.models import BaseFile, BaseClass, BaseMethod
 from tostr.languages.java.builders import JavaMethodBuilder
 
 @pytest.fixture(scope="session")
@@ -22,12 +22,14 @@ def mock_registry():
 @pytest.fixture
 def mock_parent_class():
     """Mocks the BaseClass parent needed for UID generation."""
-    mock_cls = MagicMock(spec=BaseClass)
-    # The UID of a class uses #
-    mock_cls.uid = "src/main/java/com/tostr/Mathf.java#Mathf"
-    mock_cls.path = Path("src/main/java/com/tostr/Mathf.java")
-    # Make sure isinstance(parent, BaseFile) returns False
-    mock_cls.__class__ = BaseClass 
+    mock_cls = MagicMock(
+        spec=BaseClass,
+        uid="com.example.OuterClass",
+        name="OuterClass",
+        parent=MagicMock(spec=BaseFile, package="com.example"),
+        imports=["java.util.*", "com.example.dep.Dependency"],
+        fields=[MagicMock(name="myService", field_type="MyService")]
+    )
     return mock_cls
 
 def test_java_method_builder_extracts_complex_method(java_parser, mock_registry, mock_parent_class):
@@ -48,7 +50,7 @@ def test_java_method_builder_extracts_complex_method(java_parser, mock_registry,
     # 1. Find the method nodes inside the class body
     method_nodes = []
     class_node = tree.root_node.children[0]
-    body_node = class_node.child_by_field_name('body')
+    body_node = class_node.child_by_field_name("body")
     
     for child in body_node.children:
         if child.type == "method_declaration":
@@ -63,7 +65,7 @@ def test_java_method_builder_extracts_complex_method(java_parser, mock_registry,
     method_obj = builder.from_node(complex_method_node, parent=mock_parent_class)
 
     # Core Properties
-    assert method_obj.name == "processData", f"Expected 'processData', got {method_obj.name}"
+    assert method_obj.name == "processData", f"Expected \'processData\', got {method_obj.name}"
     assert method_obj.parent == mock_parent_class
     
     # Signature Tests
@@ -78,7 +80,7 @@ def test_java_method_builder_extracts_complex_method(java_parser, mock_registry,
     assert method_obj.arity == 2, f"Expected arity 2, got {method_obj.arity}"
     
     # UID Test (Crucial for method overloading support)
-    expected_uid = "src/main/java/com/tostr/Mathf.java#Mathf.processData(int, String)"
+    expected_uid = "com.example.OuterClass.processData(int, String)"
     assert method_obj.uid == expected_uid, f"Expected {expected_uid}, got {method_obj.uid}"
 
 
@@ -91,5 +93,5 @@ def test_java_method_builder_extracts_complex_method(java_parser, mock_registry,
     assert "void ping()" in simple_obj.signature
     
     # Check empty parameter UID
-    expected_simple_uid = "src/main/java/com/tostr/Mathf.java#Mathf.ping()"
+    expected_simple_uid = "com.example.OuterClass.ping()"
     assert simple_obj.uid == expected_simple_uid, f"Expected {expected_simple_uid}, got {simple_obj.uid}"
