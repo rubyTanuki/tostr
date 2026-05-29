@@ -1,22 +1,22 @@
 
-class ToasterError(Exception):
-    """Base exception for all Toaster domain errors."""
+class TostrError(Exception):
+    """Base exception for all Tostr domain errors."""
     pass
 
-class StructNotFoundError(ToasterError):
+class StructNotFoundError(TostrError):
     pass
 
-class APIKeyError(ToasterError):
+class APIKeyError(TostrError):
     pass
 
-class ResolveError(ToasterError):
+class ResolveError(TostrError):
     pass
 
-class LanguageNotSupportedError(ToasterError):
+class LanguageNotSupportedError(TostrError):
     pass
 
-class TargetFileNotFoundError(ToasterError):
+class TargetFileNotFoundError(TostrError):
     pass
 
-class DatabaseNotFoundError(ToasterError):
+class DatabaseNotFoundError(TostrError):
     pass

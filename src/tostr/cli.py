@@ -5,11 +5,11 @@ import typer
 from typing import Annotated
 from loguru import logger
 
-from tostr.exceptions import ToasterError
+from tostr.exceptions import TostrError
 
 from tostr.commands import init_async, inspect_async, skeleton_async, watch_async, clean_db
 
-from tostr.mcp import mcp
+from tostr.server import mcp
 
 from tostr.core.utils.logger import configure_cli_logging
 
@@ -67,7 +67,7 @@ def watch(
     configure_cli_logging(debug)
     try:
         asyncio.run(watch_async(path))
-    except ToasterError as e:
+    except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
 
@@ -94,7 +94,7 @@ def clean(
     configure_cli_logging(debug)
     try:
         clean_db(path)
-    except ToasterError as e:
+    except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
 
@@ -137,7 +137,7 @@ def init(
     start_time = time.perf_counter()
     try:
         asyncio.run(init_async(path, use_cache, ignore))
-    except ToasterError as e:
+    except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
     
@@ -190,7 +190,7 @@ def inspect(
     try:
         result = asyncio.run(inspect_async(id, path, include_body=include_body, pretty=pretty))
         print(result)
-    except ToasterError as e:
+    except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
     
@@ -237,7 +237,7 @@ def skeleton(
     try:
         result = asyncio.run(skeleton_async(subpath, path, pretty=pretty))
         print(result)
-    except ToasterError as e:
+    except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
     end_time = time.perf_counter()

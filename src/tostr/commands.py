@@ -113,12 +113,12 @@ async def skeleton_async(subpath: str, project_path: Path, pretty: bool = True):
 
 active_tasks = {}
 
-async def watch_async(target_path: Path):
+async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
     llm = get_llm_client()
     
     logger.info("Starting Listener")
     try:
-        async for changes in awatch(target_path):
+        async for changes in awatch(target_path, stop_event=stop_event):
             for change_type, path in changes:
                 path = Path(path).relative_to(target_path)
                 if ".tostr" in str(path):

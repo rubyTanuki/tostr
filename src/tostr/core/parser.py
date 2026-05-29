@@ -102,8 +102,9 @@ class BaseParser(ABC):
         return file_obj
     
     def resolve_dependencies(self):
-        logger.info(f"Starting dependency resolution from root: {self.registry.root}")
-        self.registry.root.resolve_dependencies()
+        if self.registry.root:
+            logger.info(f"Starting dependency resolution from root: {self.registry.root}")
+            self.registry.root.resolve_dependencies()
     
     def load_cache(self):
         # print("Attempting to load cache from SQLite database...")
@@ -112,20 +113,8 @@ class BaseParser(ABC):
         # print(f"✅ Loaded Cache in {time.time() - t_cache:.2f} seconds")
                     
     async def resolve_descriptions_async(self):
-        self.visited_ucids = set()
-        coroutine_list = [file.resolve_description_async(self.llm, self.visited_ucids) for file in self.registry.files]
-        if coroutine_list == []: return
-        result = await asyncio.gather(*coroutine_list)
-        
-        
-    # def write_skeleton(self):
-    #     tost_string = tost.dump_parser(self, verbosity=Verbosity.SIMPLE)
-    #     tostr_dir = self.path / ".tostr"
-    #     tostr_dir.mkdir(exist_ok=True)
-    #     with open(tostr_dir / "skeleton.tost", "w") as file:
-    #         file.write(tost_string)
-            
-    # def write_cache(self, stale: bool = False):
-    #     logger.debug("Writing AST to SQLite database...")
-    #     self.registry.save_to_cache(stale=stale)
-        
+        visited_ucids = set()
+        coroutine_list = [file.resolve_description_async(self.llm, visited_ucids) for file in self.registry.files]
+        if not coroutine_list:
+            return
+        await asyncio.gather(*coroutine_list)
