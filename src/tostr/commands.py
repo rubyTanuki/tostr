@@ -78,23 +78,42 @@ async def init_async(target_path: Path, use_cache: bool = True, ignore: str = No
         
     # Write Cache
     parser.registry.save_to_cache()
+
+def resolve_uid_to_id(uid: str, project_path: Path) -> str:
+    """Simplifies UID to ID resolution by querying the database directly."""
+    _verify_db_exists(project_path)
+    db = SQLiteCache(project_path / ".tostr" / "cache.db")
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT id FROM structs WHERE uid = ?", (uid,)).fetchone()
+        return row[0] if row else None
     
-async def inspect_async(struct_id:str, project_path: Path, include_body: bool = False, pretty: bool = True):
+async def inspect_async(struct_ids: list[str], project_path: Path, include_body: bool = False, pretty: bool = True):
     _verify_db_exists(project_path)
     
     db = SQLiteCache(project_path / ".tostr" / "cache.db")
-    
     registry = Registry(db=db, use_cache=True, project_path=project_path)
-    struct_obj = registry.get_struct_by_id(struct_id)
-    if struct_obj is None:
-        raise StructNotFoundError(f"Struct not found with id {struct_id}.")
     
-    logger.debug(f"{struct_obj.uid}'s children: {[str(child) for child in struct_obj.all_children]}")
-    
-    tost_string = tost.dump(struct_obj, verbosity=Verbosity.VERBOSE, include_body=include_body, pretty=pretty)
-    if isinstance(struct_obj, BaseCodeStruct):
-        tost_string = f"{str(struct_obj.path)}\n{tost_string}"
-    return tost_string
+    results = []
+    for struct_id in struct_ids:
+        # Check if it's a UID and needs resolution
+        if not (struct_id.startswith(("S-", "C-", "M-", "V-", "F-", "D-"))):
+            resolved_id = resolve_uid_to_id(struct_id, project_path)
+            if resolved_id:
+                struct_id = resolved_id
+        
+        struct_obj = registry.get_struct_by_id(struct_id)
+        if struct_obj is None:
+            results.append(f"Error: Struct not found with id/uid {struct_id}.")
+            continue
+        
+        logger.debug(f"{struct_obj.uid}'s children: {[str(child) for child in struct_obj.all_children]}")
+        
+        tost_string = tost.dump(struct_obj, verbosity=Verbosity.VERBOSE, include_body=include_body, pretty=pretty)
+        if isinstance(struct_obj, BaseCodeStruct):
+            tost_string = f"{str(struct_obj.path)}\n{tost_string}"
+        results.append(tost_string)
+        
+    return "\n\n".join(results)
 
 async def skeleton_async(subpath: str, project_path: Path, pretty: bool = True, depth: int = 7, files_only: bool = False):
     _verify_db_exists(project_path)
