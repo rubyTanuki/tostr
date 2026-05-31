@@ -1,11 +1,15 @@
 import threading
 import asyncio
+import json
 from pathlib import Path
 from fastmcp import FastMCP
 from loguru import logger
 import os
+from typing import Union, List
 
 from tostr.exceptions import TostrError
+from tostr.core.db import SQLiteCache
+from tostr.core.registry import Registry
 
 from tostr.commands import (
     init_async, 
@@ -124,21 +128,65 @@ async def init(workspace_path: str, use_cache: bool = True, ignore: str = None) 
     except Exception as e:
         return f"Fatal Error Initializing Tostr: {str(e)}"
 
+def _parse_list_input(input_val: Union[str, List[str]]) -> List[str]:
+    """Flexible parser for list inputs that might be strings, JSON strings, or actual lists."""
+    if isinstance(input_val, list):
+        return input_val
+    if not isinstance(input_val, str):
+        return [str(input_val)]
+    
+    input_val = input_val.strip()
+    if not input_val:
+        return []
+        
+    # Try parsing as JSON list
+    if input_val.startswith("[") and input_val.endswith("]"):
+        try:
+            parsed = json.loads(input_val)
+            if isinstance(parsed, list):
+                return [str(i) for i in parsed]
+        except json.JSONDecodeError:
+            pass
+            
+    # Default to comma-separated
+    return [i.strip() for i in input_val.split(",") if i.strip()]
+
 @mcp.tool()
-async def inspect(id: str, include_body: bool = False) -> str:
+async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False) -> str:
     """
-    Output the AST details and code for a specific struct ID.
-    Use this when you need the full implementation details of a specific function or class.
+    Output the AST details and code for specific struct IDs.
+    Use this when you need the full implementation details of specific functions or classes.
     
     Args:
-        id: The unique Tostr ID of the struct to inspect.
+        ids: A list or comma-separated string of unique Tostr IDs of the structs to inspect.
         include_body: Include the raw code body in the output.
     """
     if not session.is_initialized:
         return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
     
     try:
-        result = await inspect_async(id, session.project_dir, include_body, pretty=False)
+        id_list = _parse_list_input(ids)
+        result = await inspect_async(id_list, session.project_dir, include_body, pretty=False)
+        return str(result)
+    except TostrError as e:
+        return f"Error: {e}"
+
+@mcp.tool()
+async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False) -> str:
+    """
+    Output the AST details and code for specific struct UIDs.
+    Use this when you have the UID from a previous query or from the skeleton output and want to see the full details.
+    
+    Args:
+        uids: A list or comma-separated string of unique Tostr UIDs of the structs to inspect.
+        include_body: Include the raw code body in the output.
+    """
+    if not session.is_initialized:
+        return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
+    
+    try:
+        uid_list = _parse_list_input(uids)
+        result = await inspect_async(uid_list, session.project_dir, include_body, pretty=False)
         return str(result)
     except TostrError as e:
         return f"Error: {e}"

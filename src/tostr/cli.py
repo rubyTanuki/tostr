@@ -2,12 +2,18 @@ import asyncio
 import time
 from pathlib import Path
 import typer
-from typing import Annotated
+from typing import Annotated, List
 from loguru import logger
-
 from tostr.exceptions import TostrError
 
-from tostr.commands import init_async, inspect_async, skeleton_async, watch_async, clean_db
+from tostr.commands import (
+    init_async, 
+    inspect_async, 
+    skeleton_async, 
+    watch_async, 
+    clean_db,
+    resolve_uid_to_id
+)
 
 from tostr.server import mcp
 
@@ -147,10 +153,46 @@ def init(
 
 
 @app.command()
-def inspect(
-    id: Annotated[
+def resolve(
+    uid: Annotated[
         str, 
-        typer.Argument()
+        typer.Argument(help="The UID to resolve to an ID")
+    ],
+    path: Path = typer.Argument(
+        ".", 
+        help="Path to the project directory to scan",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True
+    ),
+    debug: Annotated[
+        bool, 
+        typer.Option(
+            "--debug/--no-debug", 
+            "-d/-nd",
+            help="Enable debug logging"
+            )
+    ] = False
+):
+    """Resolve a UID to its corresponding struct ID."""
+    configure_cli_logging(debug)
+    try:
+        result = resolve_uid_to_id(uid, path)
+        if result:
+            print(result)
+        else:
+            typer.secho(f"❌ Error: No struct found with UID '{uid}'", fg="red", err=True)
+            raise typer.Exit(code=1)
+    except TostrError as e:
+        typer.secho(f"❌ Error: {e}", fg="red", err=True)
+        raise typer.Exit(code=1)
+
+@app.command()
+def inspect(
+    ids: Annotated[
+        List[str], 
+        typer.Argument(help="List of struct IDs or UIDs to inspect")
     ],
     path: Path = typer.Argument(
         ".", 
@@ -181,14 +223,25 @@ def inspect(
             "-d/-nd",
             help="Enable debug logging"
             )
-    ] = False
+    ] = False,
+    max_lines: Annotated[
+        int,
+        typer.Option(
+            "--max-lines",
+            "-m",
+            help="Maximum number of lines to include in the output (default: 500)"
+        )
+    ] = 500
 ):
-    """Output the AST details for a specific struct ID."""
+    """Output the AST details for specific struct IDs or UIDs."""
     configure_cli_logging(debug)
     
     start_time = time.perf_counter()
     try:
-        result = asyncio.run(inspect_async(id, path, include_body=include_body, pretty=pretty))
+        result = asyncio.run(inspect_async(ids, path, include_body=include_body, pretty=pretty))
+        lines = result.splitlines()
+        if len(lines) > max_lines:
+            result = "\n".join(lines[:max_lines]) + "\n...[truncated]..."
         print(result)
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
@@ -243,7 +296,15 @@ def skeleton(
             "-f",
             help="Only generate skeleton for files (default: False)"
         )
-    ] = False
+    ] = False,
+    max_lines: Annotated[
+        int,
+        typer.Option(
+            "--max-lines",
+            "-m",
+            help="Maximum number of lines to include in the output (default: 500)"
+        )
+    ] = 500
     
 ):
     """Output the .tost skeleton format for all files matching a specific subpath."""
@@ -252,6 +313,9 @@ def skeleton(
     start_time = time.perf_counter()
     try:
         result = asyncio.run(skeleton_async(subpath, path, pretty=pretty, depth=depth, files_only=files_only))
+        lines = result.splitlines()
+        if len(lines) > max_lines:
+            result = "\n".join(lines[:max_lines]) + "\n...[truncated]..."
         print(result)
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
