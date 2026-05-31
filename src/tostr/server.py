@@ -152,7 +152,7 @@ def _parse_list_input(input_val: Union[str, List[str]]) -> List[str]:
     return [i.strip() for i in input_val.split(",") if i.strip()]
 
 @mcp.tool()
-async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False) -> str:
+async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False, max_lines: int = 500) -> str:
     """
     Output the AST details and code for specific struct IDs.
     Use this when you need the full implementation details of specific functions or classes.
@@ -160,6 +160,7 @@ async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False) 
     Args:
         ids: A list or comma-separated string of unique Tostr IDs of the structs to inspect.
         include_body: Include the raw code body in the output.
+        max_lines: Maximum number of lines to include in the output (default: 500).
     """
     if not session.is_initialized:
         return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
@@ -167,12 +168,17 @@ async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False) 
     try:
         id_list = _parse_list_input(ids)
         result = await inspect_async(id_list, session.project_dir, include_body, pretty=True)
+        
+        lines = str(result).splitlines()
+        if len(lines) > max_lines:
+            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+            
         return str(result)
     except TostrError as e:
         return f"Error: {e}"
 
 @mcp.tool()
-async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False) -> str:
+async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False, max_lines: int = 500) -> str:
     """
     Output the AST details and code for specific struct UIDs.
     Use this when you have the UID from a previous query or from the skeleton output and want to see the full details.
@@ -180,6 +186,7 @@ async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False
     Args:
         uids: A list or comma-separated string of unique Tostr UIDs of the structs to inspect.
         include_body: Include the raw code body in the output.
+        max_lines: Maximum number of lines to include in the output (default: 500).
     """
     if not session.is_initialized:
         return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
@@ -187,6 +194,11 @@ async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False
     try:
         uid_list = _parse_list_input(uids)
         result = await inspect_async(uid_list, session.project_dir, include_body, pretty=True)
+        
+        lines = str(result).splitlines()
+        if len(lines) > max_lines:
+            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+            
         return str(result)
     except TostrError as e:
         return f"Error: {e}"
@@ -210,7 +222,7 @@ async def clean(workspace_path: str) -> str:
         return f"Error: {e}"
 
 @mcp.tool()
-async def skeleton(subpath: str, files_only: bool = False, depth: int = 7) -> str:
+async def skeleton(subpath: str, files_only: bool = False, depth: int = 7, max_lines: int = 500) -> str:
     """
     Output the .tost skeleton format for all files matching a specific subpath.
     Use this to understand the high-level architecture, classes, and function signatures of a file or directory without reading the full code.
@@ -219,12 +231,18 @@ async def skeleton(subpath: str, files_only: bool = False, depth: int = 7) -> st
         subpath: File or directory path relative to the project root to generate a skeleton for.
         files_only: If True, only include files and directories, excluding any code structs. Default is False, which includes all structs.
         depth: The AST depth of the skeleton to display. Default is 7, which includes most details but can be adjusted for deeper trees.
+        max_lines: Maximum number of lines to include in the output (default: 500).
     """
     if not session.is_initialized:
         return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
     
     try:
         result = await skeleton_async(subpath, session.project_dir, pretty=True, files_only=files_only, depth=depth)
+        
+        lines = str(result).splitlines()
+        if len(lines) > max_lines:
+            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+            
         return str(result)
     except TostrError as e:
         return f"Error: {e}"

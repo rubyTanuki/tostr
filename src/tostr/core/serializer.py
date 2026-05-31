@@ -69,8 +69,12 @@ class tost:
         is_code_struct = isinstance(obj, BaseCodeStruct)
         is_directory = isinstance(obj, Directory)
         is_file = isinstance(obj, BaseFile)
+
+        one_child = len(obj.all_children) == 1
         
         child_verbosity = verbosity - 1 # if not is_directory else verbosity
+        if one_child:
+            child_verbosity = verbosity
         
         max_lines = 5
         # if verbosity == Verbosity.FULL:
@@ -91,7 +95,7 @@ class tost:
         parts.append(header_str)
         
         if verbosity >= Verbosity.SKELETON:
-            if obj.description:
+            if obj.description and not one_child:
                 if pretty:
                     parts.append(textwrap.fill(f"{obj.description}", width=_LINE_WRAP_WIDTH-len(indent_str), initial_indent="// ", subsequent_indent="   ", max_lines=max_lines, placeholder="..."))
                 else:
@@ -100,16 +104,13 @@ class tost:
         # if verbosity >= Verbosity.SIMPLE:
         if obj.files:
             for f in obj.files:
-                parts.append(cls.dump(f, verbosity=verbosity, indent=1, include_body=include_body, pretty=pretty))
+                parts.append(cls.dump(f, verbosity=verbosity, indent=1, include_body=include_body and one_child, pretty=pretty))
         if obj.directories:
             for d in obj.directories:
-                if d is obj:
-                    logger.warning(f"Skipping dumping directory {d} as it is the same as its parent {obj}, likely to avoid circular reference.")
-                    continue
-                parts.append('\n' +cls.dump(d, verbosity=verbosity, indent=1, pretty=pretty))
+                parts.append('\n' +cls.dump(d, verbosity=verbosity, indent=1, pretty=pretty, include_body=include_body and one_child))
         if obj.classes:
             for c in obj.classes:
-                parts.append(cls.dump(c, child_verbosity, indent=1, pretty=pretty))
+                parts.append(cls.dump(c, child_verbosity, indent=1, pretty=pretty, include_body=include_body and one_child))
         # if verbosity >= Verbosity.VERBOSE:
         #     if obj.parent and obj.parent.uid:
         #         parts.insert(0, f"/{obj.parent.uid}")
