@@ -94,8 +94,5 @@ class BaseParser(ABC):
         self.registry.load_cache()
                     
     async def resolve_descriptions_async(self):
-        visited_ucids = set()
-        coroutine_list = [file.resolve_description_async(self.llm, visited_ucids) for file in self.registry.files]
-        if not coroutine_list:
-            return
-        await asyncio.gather(*coroutine_list)
+        if self.registry.root:
+            await self.registry.root.resolve_description_async(self.llm)

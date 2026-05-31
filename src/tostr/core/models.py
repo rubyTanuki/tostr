@@ -4,10 +4,14 @@ from typing import Set, List, Dict, Optional, TYPE_CHECKING, ClassVar
 import json
 import hashlib
 from pathlib import Path
+from pydantic import BaseModel, Field
+import asyncio
 
 from loguru import logger
 from tostr.core.providers import StructBuilderProvider
 from tostr.exceptions import LanguageNotSupportedError
+
+from tostr.llm import CLASS_SYSTEM_INSTRUCTION, FILE_SYSTEM_INSTRUCTION, DIRECTORY_SYSTEM_INSTRUCTION
 
 if TYPE_CHECKING:
     from tostr.core.registry import Registry
@@ -174,7 +178,7 @@ class BaseStruct(ABC):
                 child.resolve_dependencies()
     
     @abstractmethod
-    async def resolve_description_async(self, llm: "LLMClient", visited: set[str] = None):
+    async def resolve_description_async(self, llm: "LLMClient"):
         pass
     
     @classmethod
@@ -224,8 +228,44 @@ class Directory(BaseStruct):
         uid = uid or str(path)
         super().__init__(name=path.name, path=path, uid=uid, registry=registry, parent=parent)
     
-    async def resolve_description_async(self, llm: "LLMClient", visited: set[str] = None):
-        pass
+    async def resolve_description_async(self, llm: "LLMClient"):
+        if self.description: return
+        if self.all_children:
+            coroutine_list = [
+                child.resolve_description_async(llm) 
+                for child in self.all_children
+            ]
+            await asyncio.gather(*coroutine_list)
+
+        if len(self.all_children) == 0:
+            self.description = "Empty Directory"
+            return
+        if len(self.all_children) == 1:
+            self.description = self.all_children[0].description
+            return
+        
+        logger.debug(f"Generating Description for directory {self.uid}...")
+
+        input_data = {
+            c.uid: c.description for c in self.all_children
+        }
+
+        class DirectoryDescriptionSchema(BaseModel):
+            description: str = Field(description="Description of the directory")
+
+        response = await llm.generate_description(
+            input_data=input_data,
+            system_prompt=DIRECTORY_SYSTEM_INSTRUCTION,
+            response_schema=DirectoryDescriptionSchema
+        )
+
+        if not response:
+            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
+            return
+
+        self.description = response.description
+
+        logger.debug(f"Successfully Generated Description for directory {self.uid}")
     
     def parse_children(self):
         if self.path is None:
@@ -285,10 +325,46 @@ class BaseFile(BaseStruct):
     diff_hash: str = ""
     node: "Node" = None
     
-    async def resolve_description_async(self, llm: "LLMClient", visited: set[str] = None):
-        for child in self.all_children:
-            await child.resolve_description_async(llm, visited)
-    
+    async def resolve_description_async(self, llm: "LLMClient"):
+        if self.description: return
+        if self.all_children:
+            coroutine_list = [
+                child.resolve_description_async(llm) 
+                for child in self.all_children
+            ]
+            await asyncio.gather(*coroutine_list)
+
+        if len(self.all_children) == 0:
+            self.description = "Empty File"
+            return
+        if len(self.all_children) == 1:
+            self.description = self.all_children[0].description
+            return
+        
+        logger.debug(f"Generating Description for file {self.uid}...")
+
+        input_data = {
+            c.uid: c.description for c in self.all_children
+        }
+
+        class FileDescriptionSchema(BaseModel):
+            description: str = Field(description="Description of the file")
+
+        response = await llm.generate_description(
+            input_data=input_data,
+            system_prompt=FILE_SYSTEM_INSTRUCTION,
+            response_schema=FileDescriptionSchema
+        )
+
+        if not response:
+            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
+            return
+
+        self.description = response.description
+
+        logger.debug(f"Successfully Generated Description for file {self.uid}")
+
+
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "BaseFile"
@@ -428,30 +504,39 @@ class BaseClass(BaseCodeStruct):
             
         return result_bytes.decode('utf-8')
     
-    async def resolve_description_async(self, llm: "LLMClient", visited: set[str] = None):
-        if visited is None: visited = set()
+    async def resolve_description_async(self, llm: "LLMClient"):
+        if self.description: return
+
+        logger.debug(f"Generating Description for class {self.uid}...")
+
+        method_lookup = {idx: m for idx, m in enumerate(self.methods) if m.description is not None}
         
-        if self.uid in visited or not self.needs_description:
-            return
-        visited.add(self.uid)
-        
-        if not self.registry:
-            raise ValueError("Registry reference is required for description resolution.")
-        try:
-            response_obj = await llm.describe_class(self, self.imports)
-        except Exception as e:
-            logger.error(f"Failed to generate description for {self.uid}: {e}")
-            return
-            
-        if not response_obj or response_obj.status == "error":
-            error_msg = response_obj.error if response_obj else 'Returned None'
-            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure: {error_msg}")
+        input_data = {
+            "code": self.skeletonize(),
+            "method_ids_to_signatures": {idx: m.signature for idx, m in method_lookup.items()}
+        }
+
+        class ClassDescriptionSchema(BaseModel):
+            description: str = Field(description="Description of the class")
+            description_map: dict[int, str] = Field(default_factory=dict, description="Mapping of method_id to method")
+
+        response = await llm.generate_description(
+            input_data=input_data,
+            system_prompt=CLASS_SYSTEM_INSTRUCTION,
+            response_schema=ClassDescriptionSchema
+        )
+
+        if not response:
+            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
             return
 
-        if response_obj.description:
-            self.description = response_obj.description
-        else:
-            logger.warning(f"⚠️ Missing description for {self.uid} in LLM response")
+        self.description = response.description
+        
+        for idx, desc in response.description_map.items():
+            if idx in method_lookup:
+                method_lookup[idx].description = desc
+
+        logger.debug(f"Successfully Generated Description for class {self.uid}")
             
     def to_dict(self) -> dict:
         data = super().to_dict()
@@ -559,7 +644,7 @@ class BaseMethod(BaseCodeStruct):
                         for c in all_candidates:
                             self.add_fuzzy_dependency(c)
             
-    async def resolve_description_async(self, llm: "LLMClient", visited: set[str] = None):
+    async def resolve_description_async(self, llm: "LLMClient"):
         pass
     
     def to_dict(self) -> dict:
@@ -579,7 +664,7 @@ class BaseField(BaseCodeStruct):
     def resolve_dependencies(self):
         pass
     
-    async def resolve_description_async(self, llm: "LLMClient", visited: set[str] = None):
+    async def resolve_description_async(self, llm: "LLMClient"):
         pass
     
     def to_dict(self) -> dict:
