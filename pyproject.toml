@@ -5,13 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tostr"
 version = "0.1.0"
+authors = [
+    { name = "Avery Brown" }
+]
 description = "Token-Optimized Syntax Tree String IR Generator"
+readme = "README.md"
+requires-python = ">=3.9"
 dependencies = [
-    "tree-sitter",
+    "tree-sitter>=0.21.0",
     "tree-sitter-java",
     "tree-sitter-c-sharp",
     "tree-sitter-python",
-    "google.genai",
+    "google-genai",
     "pydantic",
     "typer",
     "watchfiles",

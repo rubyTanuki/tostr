@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">
-Pre-compiling Agentic AI Code Context
+Pre-computing Agentic AI Code Context
 </h1>
 
 <!-- usage gif goes here -->
@@ -13,20 +13,20 @@ Tostr is a CLI and MCP agent context engine which greatly reduces token costs an
 </p>
 
 # Features
-### Pre-compiled Abstract Syntax Tree
-Tostr scrapes your project on initialization, building a comprehensive Abstract Syntax Tree IR (Intermediate Representation) of the entire OOP code structure.
+### Pre-computed Abstract Syntax Tree
+Tostr scrapes your project on initialization, building a comprehensive Abstract Syntax Tree IR (Intermediate Representation) of the entire OOP code structure and stores it in a local SQLite database.
 
 ### Semantic Dependency Graph Resolution
-Tostr resolves dependencies semantically, building a dependency graph to allow agents to traverse inbound or outbound method calls efficiently
+Tostr resolves dependencies between structures in your code, building a dependency graph to allow agents to traverse inbound or outbound method calls efficiently.
 
 ### MCP and CLI access
-Tostr has both a CLI and MCP interface, allowing llms to boot up the mcp server for larger development sessions, while allowing agents or human developers to utilize the CLI for individual actions or manual AST traversals
+Tostr has both a CLI and MCP interface, allowing llms to boot up the mcp server for larger development sessions, while allowing agents or human developers to utilize the CLI for individual actions or quick, manual AST traversals.
 
 ### Automatic Incremental Change Diffs
-While the MCP server is running, Tostr identifies the subtree of the AST which was updated on file save, add, or delete, then re-scrapes and re-describes exactly the section that was updated, ensuring that the AST is up-to-date during development
+While the MCP server is running, Tostr identifies the subtree of the AST which was updated on file save, add, or delete, then re-scrapes and re-describes exactly the section that was updated, ensuring that the AST is instantly up-to-date during development.
 
 ### Lightweight SQLite Cache
-The AST IR and Dependency Graph is cached to an on-drive SQLite .db file to vastly increase efficiency of agent AST traversal requests, as well as allow the AST to be pushed to version control for saving tokens in shared development.
+The AST IR and Dependency Graph is cached to an on-drive SQLite .db file to vastly increase efficiency of agent AST traversal requests, as well as allow the AST to be directly queried via sql commands.
 
 # Quick Start
 <!-- downnload and install TBD -->
