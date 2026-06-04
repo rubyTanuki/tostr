@@ -276,8 +276,7 @@ def skeleton(
     debug: Annotated[
         bool, 
         typer.Option(
-            "--debug/--no-debug", 
-            "-d/-nd",
+            "--debug/--no-debug",
             help="Enable debug logging"
             )
     ] = False,
