@@ -1,15 +1,15 @@
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, Field
 from tostr.semantic.llm.base import LLMStrategy, LLMResponse
 
 class GeminiStrategy(LLMStrategy):
     def __init__(self, api_key: str, model_name: str = "gemini-3.1-flash-lite", max_concurrent_requests: int = 200):
+        from google import genai
         super().__init__(api_key, model_name, max_concurrent_requests)
         self.client = genai.Client(api_key=api_key)
         self.model_name = model_name
 
     async def generate(self, input_data_string: str, system_instruction: str, response_schema: Type[BaseModel]):
+        from google.genai import types
         # Note: LLMClient handles retries and semaphore
         try:
             response = await self.client.aio.models.generate_content(

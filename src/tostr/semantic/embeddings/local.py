@@ -1,4 +1,3 @@
-from sentence_transformers import SentenceTransformer
 from .base import EmbeddingStrategy  # Adjust import based on your file layout
 
 class SentenceTransformerEmbeddingStrategy(EmbeddingStrategy):
@@ -16,6 +15,14 @@ class SentenceTransformerEmbeddingStrategy(EmbeddingStrategy):
             batch_size: The target micro-batch size for the consumer queue.
             batch_timeout: The maximum time windows to wait before flushing an incomplete batch.
         """
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise ImportError(
+                "Could not import 'sentence_transformers'. "
+                "Please install it with 'pip install sentence-transformers'."
+            )
+
         super().__init__(batch_size=batch_size, batch_timeout=batch_timeout)
         self.model_name = model_name
         
