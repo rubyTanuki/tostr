@@ -23,7 +23,8 @@ dependencies = [
     "loguru",
     "fastmcp",
     "pathspec",
-    "sentence-transformers"
+    "sqlite-vec",
+    "onnxruntime"
 ]
 
 [project.scripts]
@@ -31,3 +32,6 @@ tostr = "tostr.cli:app"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+[tool.setuptools.package-data]
+tostr = ["resources/models/all-MiniLM-L6-v2/*"]
