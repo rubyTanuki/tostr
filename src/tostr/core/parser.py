@@ -10,9 +10,10 @@ from tostr.core.providers import StructBuilderProvider
 from tostr.exceptions import LanguageNotSupportedError
 
 class BaseParser(ABC):
-    def __init__(self, project_dir: str, llm=None, registry: Registry=None):
+    def __init__(self, project_dir: str, llm=None, embedder=None, registry: Registry=None):
         self.project_dir = project_dir
         self.llm = llm
+        self.embedder = embedder
         self.registry = registry
     
     @property
@@ -94,5 +95,8 @@ class BaseParser(ABC):
         self.registry.load_cache()
                     
     async def resolve_descriptions_async(self):
+        self.embedder.start()
         if self.registry.root:
-            await self.registry.root.resolve_description_async(self.llm)
+            await self.registry.root.resolve_description_async(self.llm, self.embedder)
+        
+        await self.embedder.drain_and_stop()

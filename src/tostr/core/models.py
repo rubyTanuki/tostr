@@ -23,6 +23,7 @@ class BaseStruct(ABC):
     uid: str = ""               # namespace.exampleClass#exampleMethod(num1: int) or src/com/example/Example.java
     id: str = field(init=False) # S-1a2b3c4d5e
     description: str = ""
+    vector: Optional[List[float]] = None # populated asynchronously by the embedding client
     
     # DEPENDENCIES / GRAPH
     inbound_dependencies: Set[BaseStruct | str] = field(default_factory=set)
@@ -178,7 +179,7 @@ class BaseStruct(ABC):
                 child.resolve_dependencies()
     
     @abstractmethod
-    async def resolve_description_async(self, llm: "LLMClient"):
+    async def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
         pass
     
     @classmethod
@@ -195,13 +196,15 @@ class BaseStruct(ABC):
             "id": self.id,
             "name": self.name,
             "uid": self.uid,
-            "type": "BaseStruct",
+            "type": "struct",
             "path": str(self.path) if self.path else ".",
             "description": self.description,
             "diff_hash": self.diff_hash,
             "inbound_dependency_strings": self.inbound_dependency_strings,
             "outbound_dependency_strings": self.outbound_dependency_strings,
         }
+        if self.vector is not None:
+            data["vector"] = self.vector
         return data
     
     def to_json(self, indent=0):
@@ -228,11 +231,12 @@ class Directory(BaseStruct):
         uid = uid or str(path)
         super().__init__(name=path.name, path=path, uid=uid, registry=registry, parent=parent)
     
-    async def resolve_description_async(self, llm: "LLMClient"):
+    async def resolve_description_async(self, llm: "LLMClient"=None, embedder:"EmbeddingClient"=None):
+        assert llm is not None, "LLMClient instance is required to resolve descriptions."
         if self.description: return
         if self.all_children:
             coroutine_list = [
-                child.resolve_description_async(llm) 
+                child.resolve_description_async(llm, embedder) 
                 for child in self.all_children
             ]
             await asyncio.gather(*coroutine_list)
@@ -264,6 +268,9 @@ class Directory(BaseStruct):
             return
 
         self.description = response.description
+
+        if embedder is not None:
+            embedder.enqueue(self)
 
         logger.debug(f"Successfully Generated Description for directory {self.uid}")
     
@@ -311,7 +318,7 @@ class Directory(BaseStruct):
     
     def to_dict(self) -> dict:
         data = super().to_dict()
-        data["type"] = "Directory"
+        data["type"] = "directory"
         data["diff_hash"] = self.diff_hash
         return data
 
@@ -325,11 +332,12 @@ class BaseFile(BaseStruct):
     diff_hash: str = ""
     node: "Node" = None
     
-    async def resolve_description_async(self, llm: "LLMClient"):
+    async def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+        assert llm is not None, "LLMClient instance is required to resolve descriptions."
         if self.description: return
         if self.all_children:
             coroutine_list = [
-                child.resolve_description_async(llm) 
+                child.resolve_description_async(llm, embedder) 
                 for child in self.all_children
             ]
             await asyncio.gather(*coroutine_list)
@@ -339,6 +347,7 @@ class BaseFile(BaseStruct):
             return
         if len(self.all_children) == 1:
             self.description = self.all_children[0].description
+            self.vector = self.all_children[0].vector
             return
         
         logger.debug(f"Generating Description for file {self.uid}...")
@@ -362,12 +371,15 @@ class BaseFile(BaseStruct):
 
         self.description = response.description
 
+        if embedder is not None:
+            embedder.enqueue(self)
+
         logger.debug(f"Successfully Generated Description for file {self.uid}")
 
 
     def to_dict(self) -> dict:
         data = super().to_dict()
-        data["type"] = "BaseFile"
+        data["type"] = "file"
         data["imports"] = self.imports
         data["body"] = self.body
         data["diff_hash"] = self.diff_hash
@@ -384,7 +396,7 @@ class BaseCodeStruct(BaseStruct):
     
     def to_dict(self) -> dict:
         data = super().to_dict()
-        data["type"] = "BaseCodeStruct"
+        data["type"] = "codestruct"
         data["signature"] = self.signature
         data["body"] = self.body
         data["start_line"] = self.start_line
@@ -504,7 +516,8 @@ class BaseClass(BaseCodeStruct):
             
         return result_bytes.decode('utf-8')
     
-    async def resolve_description_async(self, llm: "LLMClient"):
+    async def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+        assert llm is not None, "LLMClient instance is required to resolve descriptions."
         if self.description: return
 
         logger.debug(f"Generating Description for class {self.uid}...")
@@ -531,16 +544,22 @@ class BaseClass(BaseCodeStruct):
             return
 
         self.description = response.description
-        
+
+        if embedder is not None:
+            embedder.enqueue(self)
+
         for idx, desc in response.description_map.items():
             if idx in method_lookup:
-                method_lookup[idx].description = desc
+                method = method_lookup[idx]
+                method.description = desc
+                if embedder is not None:
+                    embedder.enqueue(method)
 
         logger.debug(f"Successfully Generated Description for class {self.uid}")
             
     def to_dict(self) -> dict:
         data = super().to_dict()
-        data["type"] = "BaseClass"
+        data["type"] = "class"
         if self.enum_constants:
             data["enum_constants"] = self.enum_constants
         data["inherits"] = self.inherits
@@ -559,6 +578,9 @@ class BaseMethod(BaseCodeStruct):
     # @abstractmethod
     # def _parse_dependencies(self):
     #     pass
+
+    def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+        pass
     
     def resolve_dependencies(self):
         logger.debug(f"Resolving dependencies for method {self.uid}")
@@ -643,13 +665,10 @@ class BaseMethod(BaseCodeStruct):
                     else:
                         for c in all_candidates:
                             self.add_fuzzy_dependency(c)
-            
-    async def resolve_description_async(self, llm: "LLMClient"):
-        pass
     
     def to_dict(self) -> dict:
         data = super().to_dict()
-        data["type"] = "BaseMethod"
+        data["type"] = "method"
         data["arity"] = self.arity
         data["dependency_names"] = self.dependency_names
         return data
@@ -660,15 +679,16 @@ class BaseField(BaseCodeStruct):
     
     field_type: str = ""
     children: dict = field(init=False, repr=False, default_factory=dict)
-    
-    def resolve_dependencies(self):
-        pass
-    
-    async def resolve_description_async(self, llm: "LLMClient"):
+
+    # @abstractmethod
+    # def _parse_dependencies(self):
+    #     pass
+
+    def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
         pass
     
     def to_dict(self) -> dict:
         data = super().to_dict()
-        data["type"] = "BaseField"
+        data["type"] = "field"
         data["field_type"] = self.field_type
         return data

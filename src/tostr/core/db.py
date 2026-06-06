@@ -1,4 +1,5 @@
 import sqlite3
+import sqlite_vec
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -13,6 +14,9 @@ class SQLiteCache:
     def get_connection(self):
         """Yields a SQLite connection optimized for concurrent swarm reads/writes."""
         conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -77,5 +81,13 @@ class SQLiteCache:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type)")
+            
+            # VECTORS TABLE (Adjacent virtual table for sqlite-vec)
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS vec_structs USING vec0(
+                    struct_id TEXT KEY,
+                    vector FLOAT[384]
+                )
+            """)
             
             conn.commit()

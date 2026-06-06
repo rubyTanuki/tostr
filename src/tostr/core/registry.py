@@ -3,6 +3,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from pathlib import Path
 import json
 import hashlib
+import sqlite_vec
 from loguru import logger
 
 from tostr.core.models import BaseFile, BaseClass, BaseMethod, BaseField, Directory
@@ -356,6 +357,7 @@ class Registry:
         parsed_ids = [(node.id,) for node in self.uid_map.values()]
         grouped_nodes = defaultdict(list)
         all_edges = set()
+        vectors = []
         
         def serialize_for_db(value):
             if isinstance(value, (dict, list, tuple, set)):
@@ -368,6 +370,11 @@ class Registry:
             data_dict = node.to_dict()
             if stale and data_dict.get("description"):
                 data_dict["description"] = f"[STALE] {data_dict["description"]}"
+            
+            # Extract vector if present for separate virtual table storage
+            vector = data_dict.pop("vector", None)
+            if vector is not None:
+                vectors.append((node.id, sqlite_vec.serialize_float32(vector)))
             
             column_footprint = tuple(data_dict.keys())
             grouped_nodes[column_footprint].append(data_dict) 
@@ -384,4 +391,11 @@ class Registry:
             conn.executemany("DELETE FROM edges WHERE source_id = ?", parsed_ids)
             if all_edges:
                 conn.executemany("INSERT INTO edges (source_id, target_id, edge_type) VALUES (?, ?, ?)", list(all_edges))
+            
+            if vectors:
+                # vec0 virtual tables do not naturally enforce uniqueness on non-rowid keys during REPLACE
+                # so we manually delete to avoid duplicates before inserting.
+                conn.executemany("DELETE FROM vec_structs WHERE struct_id = ?", [(v[0],) for v in vectors])
+                conn.executemany("INSERT INTO vec_structs (struct_id, vector) VALUES (?, ?)", vectors)
+                
             conn.commit()
