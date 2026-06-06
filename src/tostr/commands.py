@@ -1,11 +1,14 @@
 import asyncio
 import os
 import shutil
+import sqlite_vec
 from pathlib import Path
 from watchfiles import awatch, Change
 from loguru import logger
+from functools import lru_cache
 
 from tostr.semantic.llm import LLMClient, GeminiStrategy
+from tostr.semantic.embeddings import EmbeddingClient, EmbeddingStrategy, OnnxEmbeddingStrategy
 from tostr.core import Registry, tost, Verbosity, BaseParser, SQLiteCache, BaseCodeStruct
 
 from tostr.exceptions import APIKeyError, StructNotFoundError, DatabaseNotFoundError
@@ -22,6 +25,15 @@ def get_llm_client():
     strategy = GeminiStrategy(api_key=GEMINI_API_KEY)
     return LLMClient(strategy=strategy)
 
+@lru_cache(maxsize=1)
+def get_cached_embedding_client():
+    """
+    Guarantees the model graph is initialized exactly once 
+    per long-running process lifecycle.
+    """
+    strategy = OnnxEmbeddingStrategy()
+    return EmbeddingClient(strategy=strategy)
+
 def clean_db(target_path: Path):
     if os.path.exists(target_path / ".tostr"):
         shutil.rmtree(target_path / ".tostr")
@@ -36,11 +48,12 @@ def clean_db(target_path: Path):
 
 async def _build_ast_async(target_path: Path, use_cache: bool = True) -> BaseParser:
     llm = get_llm_client()
+    embedder = get_embedding_client()
     db = SQLiteCache(target_path / ".tostr" / "cache.db")
     registry = Registry(use_cache=use_cache, db=db, project_path=target_path)
     logger.info("Building AST...")
     
-    parser = BaseParser(target_path, llm, registry)
+    parser = BaseParser(target_path, llm, embedder, registry)
     logger.info("Parsing files...")
     await parser.parse()
     logger.success("✅ Parsed files")
@@ -163,6 +176,43 @@ async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
                 
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("\n🛑 Stopping listener...")
+
+async def search_async(query: str, project_path: Path, filter_type: str = None, top_k: int = 5):
+    _verify_db_exists(project_path)
+    embedder = get_cached_embedding_client()
+    query_vector = embedder.strategy.embed_query(query)
+    
+    db = SQLiteCache(project_path / ".tostr" / "cache.db")
+    
+    # We fetch a larger k from the vector index to allow room for the JOIN filter
+    k_to_fetch = top_k * 10 if filter_type else top_k
+    
+    with db.get_connection() as conn:
+        query_vec_bytes = sqlite_vec.serialize_float32(query_vector)
+        
+        sql = """
+            SELECT s.uid, s.id, s.type, v.distance
+            FROM vec_structs v
+            JOIN structs s ON s.id = v.struct_id
+            WHERE v.vector MATCH ?
+            AND v.k = ?
+        """
+        params = [query_vec_bytes, k_to_fetch]
+        
+        if filter_type:
+            sql += " AND s.type LIKE ?"
+            params.append(f"%{filter_type}%")
+            
+        cursor = conn.execute(sql, params)
+        rows = cursor.fetchall()
+        
+        results = []
+        for row in rows:
+            results.append(f"{row['id']}|{row['uid']} ({row['type']})")
+            if len(results) >= top_k:
+                break
+                
+        return "\n".join(results) if results else "No results found matching your query."
 
 async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient):
     logger.info(f"Processing file {filepath}")

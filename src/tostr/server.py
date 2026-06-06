@@ -16,7 +16,8 @@ from tostr.commands import (
     inspect_async, 
     skeleton_async, 
     watch_async,
-    clean_db
+    clean_db,
+    search_async
 )
 from tostr.core.utils.logger import configure_mcp_logging
 
@@ -218,6 +219,25 @@ async def clean(workspace_path: str) -> str:
             session.project_dir = None
             
         return f"Success: Database cleaned for {project_dir}."
+    except Exception as e:
+        return f"Error: {e}"
+
+@mcp.tool()
+async def search(query: str, filter: str = None, top_k: int = 5) -> str:
+    """
+    Search for a struct by embedding a search term and getting the top k matched structs.
+    
+    Args:
+        query: The search term or sentence to find similar code for.
+        filter: Optional filter by struct type (e.g., 'class', 'method').
+        top_k: Number of results to return (default: 5).
+    """
+    if not session.is_initialized:
+        return "Error: Tostr is not initialized. You must call 'init' with the absolute workspace path first."
+    
+    try:
+        result = await search_async(query, session.project_dir, filter_type=filter, top_k=top_k)
+        return str(result)
     except Exception as e:
         return f"Error: {e}"
 
