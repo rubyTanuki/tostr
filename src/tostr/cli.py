@@ -13,7 +13,8 @@ from tostr.commands import (
     watch_async, 
     clean_db,
     resolve_uid_to_id,
-    search_async
+    search_async,
+    get_status
 )
 
 from tostr.server import mcp
@@ -50,6 +51,56 @@ def _run_watcher_thread(target_path: Path):
 def start_mcp():
     """Start the bare MCP server. Awaits agent initialization."""
     mcp.run()
+
+@app.command()
+def status(
+    path: Path = typer.Argument(
+        ".", 
+        help="Path to the project directory to check",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True
+    ),
+    debug: Annotated[
+        bool, 
+        typer.Option(
+            "--debug/--no-debug", 
+            "-d/-nd",
+            help="Enable debug logging"
+            )
+    ] = False
+):
+    """Show the status of Tostr in the given path."""
+    configure_cli_logging(debug)
+    import datetime
+    
+    try:
+        status_data = get_status(path)
+        
+        typer.secho(f"\n📊 Tostr Status for: {status_data['project_path']}", fg="cyan", bold=True)
+        
+        if status_data["db_exists"]:
+            typer.secho("✅ Database: Found", fg="green")
+            typer.echo(f"   Path: {status_data['db_path']}")
+            
+            size_mb = status_data['db_size_bytes'] / (1024 * 1024)
+            typer.echo(f"   Size: {size_mb:.2f} MB")
+            
+            last_updated = datetime.datetime.fromtimestamp(status_data['last_updated']).strftime('%Y-%m-%d %H:%M:%S')
+            typer.echo(f"   Last Updated: {last_updated}")
+            
+            typer.secho("\n📈 Statistics:", bold=True)
+            for type_name, count in status_data["counts"].items():
+                typer.echo(f"   {type_name}: {count}")
+        else:
+            typer.secho("❌ Database: Not found", fg="red")
+            typer.echo("   Run 'tostr init' to initialize the database.")
+        typer.echo("")
+        
+    except Exception as e:
+        typer.secho(f"❌ Error: {e}", fg="red", err=True)
+        raise typer.Exit(code=1)
 
 @app.command()
 def watch(

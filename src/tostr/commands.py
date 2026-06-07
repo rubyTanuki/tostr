@@ -46,6 +46,31 @@ def clean_db(target_path: Path):
         ignore_file.unlink()
         logger.info(f"Deleted {ignore_file}")
 
+def get_status(target_path: Path) -> dict:
+    db_path = target_path / ".tostr" / "cache.db"
+    status = {
+        "project_path": str(target_path.absolute()),
+        "db_exists": db_path.exists(),
+        "db_path": str(db_path) if db_path.exists() else None,
+        "db_size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+        "last_updated": db_path.stat().st_mtime if db_path.exists() else None,
+        "counts": {}
+    }
+
+    if status["db_exists"]:
+        db = SQLiteCache(db_path)
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT type, COUNT(*) as count FROM structs GROUP BY type")
+            rows = cursor.fetchall()
+            for row in rows:
+                status["counts"][row["type"]] = row["count"]
+            
+            cursor.execute("SELECT COUNT(*) FROM edges")
+            status["counts"]["edges"] = cursor.fetchone()[0]
+
+    return status
+
 async def _build_ast_async(target_path: Path, use_cache: bool = True) -> BaseParser:
     llm = get_llm_client()
     embedder = get_cached_embedding_client()
