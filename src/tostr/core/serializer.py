@@ -1,3 +1,4 @@
+from __future__ import annotations
 from tostr.core.models import *
 
 from enum import IntEnum

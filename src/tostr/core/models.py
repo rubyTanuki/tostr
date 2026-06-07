@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 from typing import Set, List, Dict, Optional, TYPE_CHECKING, ClassVar
@@ -26,10 +27,10 @@ class BaseStruct(ABC):
     vector: Optional[List[float]] = None # populated asynchronously by the embedding client
     
     # DEPENDENCIES / GRAPH
-    inbound_dependencies: Set["BaseStruct"] = field(default_factory=set)
-    inbound_dependencies_fuzzy: Set["BaseStruct"] = field(default_factory=set) # for fuzzy matching during resolution
-    outbound_dependencies: Set["BaseStruct"] = field(default_factory=set)
-    outbound_dependencies_fuzzy: Set["BaseStruct"] = field(default_factory=set) # for fuzzy matching during resolution
+    inbound_dependencies: Set[BaseStruct] = field(default_factory=set)
+    inbound_dependencies_fuzzy: Set[BaseStruct] = field(default_factory=set) # for fuzzy matching during resolution
+    outbound_dependencies: Set[BaseStruct] = field(default_factory=set)
+    outbound_dependencies_fuzzy: Set[BaseStruct] = field(default_factory=set) # for fuzzy matching during resolution
     
     _inbound_dependency_strings: List[str] = field(default_factory=list)
     @property
@@ -47,20 +48,20 @@ class BaseStruct(ABC):
     outbound_dependency_names: Set[str] = field(default_factory=set) # for serialization only, not used for resolution
     
     # CONTEXT
-    registry: "Registry" = None
-    parent: "BaseStruct" = None
-    children: Dict[str, "BaseStruct"] = field(default_factory=dict)
+    registry: Registry = None
+    parent: BaseStruct = None
+    children: Dict[str, BaseStruct] = field(default_factory=dict)
     path: Path = None
     diff_hash: str = ""
     
     _IDPREFIX: ClassVar[str] = "S"
 
     # Caches
-    _all_children_cache: Optional[List["BaseStruct"]] = field(default=None, init=False, repr=False)
-    _methods_cache: Optional[List["BaseMethod"]] = field(default=None, init=False, repr=False)
-    _fields_cache: Optional[List["BaseField"]] = field(default=None, init=False, repr=False)
-    _classes_cache: Optional[List["BaseClass"]] = field(default=None, init=False, repr=False)
-    _directories_cache: Optional[List["Directory"]] = field(default=None, init=False, repr=False)
+    _all_children_cache: Optional[List[BaseStruct]] = field(default=None, init=False, repr=False)
+    _methods_cache: Optional[List[BaseMethod]] = field(default=None, init=False, repr=False)
+    _fields_cache: Optional[List[BaseField]] = field(default=None, init=False, repr=False)
+    _classes_cache: Optional[List[BaseClass]] = field(default=None, init=False, repr=False)
+    _directories_cache: Optional[List[Directory]] = field(default=None, init=False, repr=False)
     
     @property
     def all_children(self):
@@ -122,7 +123,7 @@ class BaseStruct(ABC):
         id_hash = hashlib.md5(self.uid.encode('utf-8')).hexdigest()[:10]
         self.id = f"{self.__class__._IDPREFIX}-{id_hash}"
         
-    def add_child(self, child: "BaseStruct"):
+    def add_child(self, child: BaseStruct):
         type_name = child.__class__.__name__ # e.g., "BaseMethod"
         
         if type_name not in self.children:
@@ -139,7 +140,7 @@ class BaseStruct(ABC):
         self._classes_cache = None
         self._directories_cache = None
     
-    def set_parent(self, parent: "BaseStruct"):
+    def set_parent(self, parent: BaseStruct):
         if self is parent:
             logger.warning(f"Attempted to set parent of {self} to itself. Skipping to avoid circular reference.")
             return
@@ -154,7 +155,7 @@ class BaseStruct(ABC):
         if child_hashes:
             self.diff_hash = hashlib.md5("".join(child_hashes).encode("utf-8")).hexdigest()
     
-    def add_dependency(self, target: "BaseStruct"):
+    def add_dependency(self, target: BaseStruct):
         self.outbound_dependencies.add(target)
         self.outbound_dependency_names.add(target.uid)
         target.inbound_dependencies.add(self)
@@ -163,7 +164,7 @@ class BaseStruct(ABC):
             if self.parent != target.parent: 
                 self.parent.add_dependency(target.parent)
                 
-    def add_fuzzy_dependency(self, target: "BaseStruct"):
+    def add_fuzzy_dependency(self, target: BaseStruct):
         self.outbound_dependencies_fuzzy.add(target)
         self.outbound_dependency_names.add('~' + target.uid)
         target.inbound_dependencies_fuzzy.add(self)
@@ -179,7 +180,7 @@ class BaseStruct(ABC):
                 child.resolve_dependencies()
     
     @abstractmethod
-    async def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         pass
     
     @classmethod
@@ -231,7 +232,7 @@ class Directory(BaseStruct):
         uid = uid or str(path)
         super().__init__(name=path.name, path=path, uid=uid, registry=registry, parent=parent)
     
-    async def resolve_description_async(self, llm: "LLMClient"=None, embedder:"EmbeddingClient"=None):
+    async def resolve_description_async(self, llm: LLMClient = None, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
         if self.description: return
         if self.all_children:
@@ -332,7 +333,7 @@ class BaseFile(BaseStruct):
     diff_hash: str = ""
     node: "Node" = None
     
-    async def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
         if self.description: return
         if self.all_children:
@@ -392,7 +393,7 @@ class BaseCodeStruct(BaseStruct):
     body: str = ""              # signature + method body or class body for hashing and LLM context
     start_line: int = 0         
     end_line: int = 0
-    node: "Node" = None         # Optional reference to the tree-sitter node for advanced processing (e.g., skeletonization)
+    node: Node = None         # Optional reference to the tree-sitter node for advanced processing (e.g., skeletonization)
     
     def to_dict(self) -> dict:
         data = super().to_dict()
@@ -431,7 +432,7 @@ class BaseClass(BaseCodeStruct):
     def imports(self) -> List[str]:
         return self.parent.imports
     
-    def resolve_type(self, type_name: str) -> Optional["BaseStruct"]:
+    def resolve_type(self, type_name: str) -> Optional[BaseStruct]:
         """Resolves a simple or scoped type name to a struct using package and imports."""
         if not type_name: return None
         if type_name in self._type_cache:
@@ -516,7 +517,7 @@ class BaseClass(BaseCodeStruct):
             
         return result_bytes.decode('utf-8')
     
-    async def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
         if self.description: return
 
@@ -579,7 +580,7 @@ class BaseMethod(BaseCodeStruct):
     # def _parse_dependencies(self):
     #     pass
 
-    def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+    def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         pass
     
     def resolve_dependencies(self):
@@ -684,7 +685,7 @@ class BaseField(BaseCodeStruct):
     # def _parse_dependencies(self):
     #     pass
 
-    def resolve_description_async(self, llm: "LLMClient", embedder:"EmbeddingClient"=None):
+    def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         pass
     
     def to_dict(self) -> dict:

@@ -1,3 +1,4 @@
+from __future__ import annotations
 from collections import defaultdict
 from typing import List, Dict, Optional, TYPE_CHECKING
 from pathlib import Path
@@ -62,7 +63,7 @@ class Registry:
             except ValueError:
                 return Path(os.path.relpath(path.resolve(), self.project_path.resolve()))
     
-    def add_struct(self, struct: "BaseStruct"):
+    def add_struct(self, struct: BaseStruct):
         """ Adds a struct to the in-memory cache """
         self.uid_map[struct.uid] = struct
         self.id_map[struct.id] = struct
@@ -84,7 +85,7 @@ class Registry:
             
         return [x for x in self.methods if x.name == name and x.arity == arity]
 
-    def _resolve_methods_recursive(self, struct: "BaseStruct", name: str, arity: int, visited: set) -> List[BaseMethod]:
+    def _resolve_methods_recursive(self, struct: BaseStruct, name: str, arity: int, visited: set) -> List[BaseMethod]:
         if struct.uid in visited: return []
         visited.add(struct.uid)
 
@@ -189,7 +190,7 @@ class Registry:
         self.root = self.get_struct_by_uid(path_str)
         return self.root
     
-    def get_struct_by_uid(self, uid: str) -> Optional["BaseStruct"]:
+    def get_struct_by_uid(self, uid: str) -> Optional[BaseStruct]:
         if uid in self.uid_map:
             return self.uid_map[uid]
         
@@ -254,7 +255,7 @@ class Registry:
         return self.id_map.get(target_id)
 
 
-    def get_struct_by_id(self, id: str) -> Optional["BaseStruct"]:
+    def get_struct_by_id(self, id: str) -> Optional[BaseStruct]:
         id_str = str(id)
         if id_str in self.id_map:
             return self.id_map[id_str]
@@ -270,20 +271,20 @@ class Registry:
             
         return self.get_struct_by_uid(target_uid)
     
-    def is_stale(self, struct: "BaseStruct") -> bool:
+    def is_stale(self, struct: BaseStruct) -> bool:
         if not self.db:
             return True
         
         return False
 
-    def update_cached_description(self, struct: "BaseStruct"):
+    def update_cached_description(self, struct: BaseStruct):
         if not self.db:
             raise RuntimeError("SqLiteCache not provided.")
         with self.db.get_connection() as conn:
             conn.execute("UPDATE structs SET description = ? WHERE uid = ?", (struct.description, struct.uid))
             conn.commit()
 
-    def save_struct_to_cache(self, struct: "BaseStruct"):
+    def save_struct_to_cache(self, struct: BaseStruct):
         if not self.db:
             raise RuntimeError("SqLiteCache not provided.")
         

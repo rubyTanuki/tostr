@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pytest
 from tostr.core.registry import Registry
 from tostr.languages.java.builders import JavaFileBuilder

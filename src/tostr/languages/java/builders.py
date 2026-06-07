@@ -1,3 +1,4 @@
+from __future__ import annotations
 from tree_sitter import Parser, Node, Query, QueryCursor
 from pathlib import Path
 import hashlib
@@ -10,13 +11,13 @@ from tostr.core.models import *
 
 class JavaBuilder(BaseBuilder):
     
-    def build_file(self) -> "JavaFileBuilder": 
+    def build_file(self) -> JavaFileBuilder: 
         return JavaFileBuilder(self.registry)
-    def build_class(self) -> "JavaClassBuilder": 
+    def build_class(self) -> JavaClassBuilder: 
         return JavaClassBuilder(self.registry)
-    def build_method(self) -> "JavaMethodBuilder": 
+    def build_method(self) -> JavaMethodBuilder: 
         return JavaMethodBuilder(self.registry)
-    def build_field(self) -> "JavaFieldBuilder": 
+    def build_field(self) -> JavaFieldBuilder: 
         return JavaFieldBuilder(self.registry)
     
     

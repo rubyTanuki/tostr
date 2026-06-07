@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock

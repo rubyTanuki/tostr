@@ -1,3 +1,4 @@
+from __future__ import annotations
 DEPENDENCY_QUERY = """
     (method_invocation
         object: [

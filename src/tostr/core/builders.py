@@ -1,3 +1,4 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -9,10 +10,10 @@ if TYPE_CHECKING:
     from tostr.core.registry import Registry
 
 class BaseBuilder(ABC):
-    def __init__(self, registry: "Registry"):
+    def __init__(self, registry: Registry):
         self.registry = registry
     
-    def with_type(self, struct_type: str) -> "BaseBuilder":
+    def with_type(self, struct_type: str) -> BaseBuilder:
         match(struct_type):
             case "file": return self.build_file()
             case "class": return self.build_class()
@@ -20,18 +21,18 @@ class BaseBuilder(ABC):
             case "field": return self.build_field()
             case "directory": return self.build_directory()
         
-    def build_file(self) -> "BaseFileBuilder": return BaseFileBuilder(self.registry)
+    def build_file(self) -> BaseFileBuilder: return BaseFileBuilder(self.registry)
     
-    def build_class(self) -> "BaseClassBuilder": return BaseClassBuilder(self.registry)
+    def build_class(self) -> BaseClassBuilder: return BaseClassBuilder(self.registry)
     
-    def build_method(self) -> "BaseMethodBuilder": return BaseMethodBuilder(self.registry)
+    def build_method(self) -> BaseMethodBuilder: return BaseMethodBuilder(self.registry)
     
-    def build_field(self) -> "BaseFieldBuilder": return BaseFieldBuilder(self.registry)
+    def build_field(self) -> BaseFieldBuilder: return BaseFieldBuilder(self.registry)
     
-    def build_directory(self) -> "DirectoryBuilder": return DirectoryBuilder(self.registry)
+    def build_directory(self) -> DirectoryBuilder: return DirectoryBuilder(self.registry)
     
 class BaseStructBuilder(ABC):
-    def __init__(self, registry: "Registry"):
+    def __init__(self, registry: Registry):
         self.registry = registry
         
     @abstractmethod

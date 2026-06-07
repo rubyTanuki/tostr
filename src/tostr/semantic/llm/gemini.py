@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pydantic import BaseModel, Field
 from tostr.semantic.llm.base import LLMStrategy, LLMResponse
 from typing import Type

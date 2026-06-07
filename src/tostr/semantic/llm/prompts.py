@@ -1,3 +1,4 @@
+from __future__ import annotations
 CLASS_SYSTEM_INSTRUCTION = """
 You are an expert senior software engineer and technical writer. 
 Your goal is to generate high-quality, information-dense documentation for software methods to be consumed by an AI Agent.

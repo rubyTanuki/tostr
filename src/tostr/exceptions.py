@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 class TostrError(Exception):
     """Base exception for all Tostr domain errors."""
