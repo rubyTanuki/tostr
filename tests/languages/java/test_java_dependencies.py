@@ -1,6 +1,7 @@
 import pytest
 from tostr.core.registry import Registry
 from tostr.languages.java.builders import JavaFileBuilder
+from tostr.core.models import BaseStruct
 
 @pytest.fixture
 def registry(tmp_path):

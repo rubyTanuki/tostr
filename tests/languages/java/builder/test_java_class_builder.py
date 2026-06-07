@@ -5,8 +5,9 @@ from unittest.mock import MagicMock
 from tree_sitter import Parser
 from tostr.languages.java.language import JAVA_LANGUAGE
 from tostr.core.registry import Registry
-from tostr.core.models import BaseFile, BaseClass, BaseMethod, BaseField
+from tostr.core.models import BaseFile, BaseClass, BaseMethod, BaseField, BaseStruct
 from tostr.languages.java.builders import JavaClassBuilder
+
 
 @pytest.fixture(scope="session")
 def java_parser():

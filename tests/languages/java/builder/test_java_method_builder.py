@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from tree_sitter import Parser
 from tostr.languages.java.language import JAVA_LANGUAGE
 from tostr.core.registry import Registry
-from tostr.core.models import BaseFile, BaseClass, BaseMethod
+from tostr.core.models import BaseFile, BaseClass, BaseMethod, BaseStruct
 from tostr.languages.java.builders import JavaMethodBuilder
 
 @pytest.fixture(scope="session")
