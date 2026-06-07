@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
-from tostr.llm.base import LLMClient, LLMStrategy, LLMResponse
+from tostr.semantic.llm.base import LLMClient, LLMStrategy, LLMResponse
 from tostr.core.models import BaseClass, BaseMethod, BaseFile
 from tostr.core.registry import Registry
 from pydantic import BaseModel, Field

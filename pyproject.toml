@@ -1,10 +1,12 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# 1. Add setuptools_scm here so the build environment can use it
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "tostr"
-version = "0.1.0"
+# 2. REMOVE version = "0.1.0" and declare it dynamic instead
+dynamic = ["version"]
 authors = [
     { name = "Avery Brown" }
 ]
@@ -32,6 +34,8 @@ tostr = "tostr.cli:app"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+[tool.setuptools_scm]
 
 [tool.setuptools.package-data]
 tostr = ["resources/models/all-MiniLM-L6-v2/*"]

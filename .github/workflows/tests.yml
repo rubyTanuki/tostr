@@ -1,1 +1,37 @@
-# TODO: add pytest workflow
+name: Run Tests
+
+on:
+  push:
+    branches: [ main ]     # Change this if your primary branch is called master
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Pytest Suite
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        # Run across multiple python targets to ensure backward/forward compatibility
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip' # Speeds up consecutive dependency installation steps
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Installs tostr, its pyproject options, plus testing packages
+        python -m pip install -e ".[test]" || python -m pip install -e . pytest
+
+    - name: Run Test Engine
+      run: |
+        pytest
