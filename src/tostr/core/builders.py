@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from tostr.core.registry import Registry
 
 class BaseBuilder(ABC):
-    def __init__(self, registry: Registry):
+    def __init__(self, registry: "Registry"):
         self.registry = registry
     
     def with_type(self, struct_type: str) -> "BaseBuilder":
@@ -31,7 +31,7 @@ class BaseBuilder(ABC):
     def build_directory(self) -> "DirectoryBuilder": return DirectoryBuilder(self.registry)
     
 class BaseStructBuilder(ABC):
-    def __init__(self, registry: Registry):
+    def __init__(self, registry: "Registry"):
         self.registry = registry
         
     @abstractmethod

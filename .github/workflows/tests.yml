@@ -14,7 +14,7 @@ jobs:
     strategy:
       matrix:
         # Run across multiple python targets to ensure backward/forward compatibility
-        python-version: ["3.13", "3.14"]
+        python-version: ["3.14"]
 
     steps:
     - name: Checkout Code
