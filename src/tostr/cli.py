@@ -361,7 +361,13 @@ def _render_inspect(result: Union[InspectResult, str], pretty: bool = True, lang
 
     # Body
     if result.body:
-        syntax = Syntax(result.body, language, theme="monokai", line_numbers=True)
+        syntax = Syntax(
+            result.body, 
+            language, 
+            theme="monokai", 
+            line_numbers=True, 
+            start_line=result.start_line
+        )
         console.print(syntax)
 
 def _render_skeleton(result: SkeletonResult, tree: Tree = None) -> Tree:
@@ -392,6 +398,7 @@ def _render_search(results: List[SearchResult]):
         res_text.append(f"({r.type}) ", style="dim")
         res_text.append(f"[dist: {r.distance:.4f}]", style="tostr.line_num")
         console.print(res_text)
+    console.print('\n')
 
 @app.command()
 def inspect(
