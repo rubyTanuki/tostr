@@ -10,7 +10,7 @@ from functools import lru_cache
 
 from tostr.semantic.llm import LLMClient, GeminiStrategy
 from tostr.semantic.embeddings import EmbeddingClient, EmbeddingStrategy, OnnxEmbeddingStrategy
-from tostr.core import Registry, tost, Verbosity, BaseParser, SQLiteCache, BaseCodeStruct
+from tostr.core import Registry, tost, InspectResult, SkeletonResult, SearchResult, BaseParser, SQLiteCache, BaseCodeStruct
 
 from tostr.exceptions import APIKeyError, StructNotFoundError, DatabaseNotFoundError
 
@@ -126,7 +126,7 @@ def resolve_uid_to_id(uid: str, project_path: Path) -> str:
         row = conn.execute("SELECT id FROM structs WHERE uid = ?", (uid,)).fetchone()
         return row[0] if row else None
     
-async def inspect_async(struct_ids: list[str], project_path: Path, include_body: bool = False, pretty: bool = True):
+async def inspect_async(struct_ids: list[str], project_path: Path, include_body: bool = False):
     _verify_db_exists(project_path)
     
     db = SQLiteCache(project_path / ".tostr" / "cache.db")
@@ -145,16 +145,11 @@ async def inspect_async(struct_ids: list[str], project_path: Path, include_body:
             results.append(f"Error: Struct not found with id/uid {struct_id}.")
             continue
         
-        logger.debug(f"{struct_obj.uid}'s children: {[str(child) for child in struct_obj.all_children]}")
+        results.append(tost.dump(struct_obj, include_body=include_body))
         
-        tost_string = tost.dump(struct_obj, verbosity=Verbosity.VERBOSE, include_body=include_body, pretty=pretty)
-        if isinstance(struct_obj, BaseCodeStruct):
-            tost_string = f"{str(struct_obj.path)}\n{tost_string}"
-        results.append(tost_string)
-        
-    return "\n\n".join(results)
+    return results
 
-async def skeleton_async(subpath: str, project_path: Path, pretty: bool = True, depth: int = 7, files_only: bool = False):
+async def skeleton_async(subpath: str, project_path: Path, depth: int = 7, files_only: bool = False):
     _verify_db_exists(project_path)
     
     db = SQLiteCache(project_path / ".tostr" / "cache.db")
@@ -167,7 +162,7 @@ async def skeleton_async(subpath: str, project_path: Path, pretty: bool = True, 
     if not registry.files:
         raise FileNotFoundError(f"No files found matching path '{subpath}'.")
     
-    return tost.dump_skeleton(registry.root, pretty=pretty, depth=depth, files_only=files_only)
+    return tost.dump_skeleton(registry.root, depth=depth, files_only=files_only)
 
 active_tasks = {}
 
@@ -234,11 +229,11 @@ async def search_async(query: str, project_path: Path, filter_type: str = None, 
         
         results = []
         for row in rows:
-            results.append(f"{row['id']}|{row['uid']} ({row['type']})")
+            results.append(SearchResult(id=row['id'], uid=row['uid'], type=row['type'], distance=row['distance']))
             if len(results) >= top_k:
                 break
                 
-        return "\n".join(results) if results else "No results found matching your query."
+        return results
 
 async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient):
     logger.info(f"Processing file {filepath}")

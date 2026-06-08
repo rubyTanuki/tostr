@@ -20,6 +20,7 @@ from tostr.commands import (
     clean_db,
     search_async
 )
+from tostr.core import InspectResult, SkeletonResult, SearchResult
 from tostr.core.utils.logger import configure_mcp_logging
 
 class MCPSession:
@@ -153,6 +154,72 @@ def _parse_list_input(input_val: Union[str, List[str]]) -> List[str]:
     # Default to comma-separated
     return [i.strip() for i in input_val.split(",") if i.strip()]
 
+def _render_inspect(result: Union[InspectResult, str]) -> str:
+    """Renders a simple, flat text representation of an InspectResult for the LLM."""
+    if isinstance(result, str):
+        return result
+    
+    lines = []
+    
+    header = f"{result.id} | {result.uid}"
+    if result.type in ["BaseClass", "BaseMethod", "BaseField"]:
+        if result.start_line != result.end_line:
+            header = f"{result.id} @L{result.start_line}-{result.end_line} | {result.signature}"
+        else:
+            header = f"{result.id} @L{result.start_line} | {result.signature}"
+    elif result.type == "BaseFile":
+        header = f"{result.id} | {result.filepath}"
+            
+    lines.append(header)
+    
+    total_children = len(result.fields) + len(result.methods) + len(result.classes) + len(result.files) + len(result.directories)
+    if result.description and total_children != 1:
+        lines.append(f"// {result.description}")
+    
+    if result.inbound_edges:
+        lines.append(f"< {', '.join(result.inbound_edges)}")
+    if result.outbound_edges:
+        lines.append(f"> {', '.join(result.outbound_edges)}")
+        
+    if result.fields:
+        lines.append("fields:")
+        for f in result.fields:
+            lines.append(f"    {f.id} | {f.signature}")
+            
+    if result.methods:
+        lines.append("methods:")
+        for m in result.methods:
+            lines.append(f"    {m.id} | {m.signature}")
+            if m.description:
+                lines.append(f"        // {m.description}")
+
+    if result.classes:
+        lines.append("classes:")
+        for c in result.classes:
+            lines.append(f"    {c.id} | {c.uid}")
+            if c.description:
+                lines.append(f"        // {c.description}")
+            
+    if result.body:
+        lines.append(f"```\n{result.body}\n```")
+        
+    return "\n".join(lines)
+
+def _render_skeleton(result: SkeletonResult, indent: int = 0) -> str:
+    """Recursively renders a simple text skeleton tree."""
+    indent_str = "    " * indent
+    line = f"{indent_str}{result.id} | {result.uid}"
+    output = [line]
+    for child in result.children:
+        output.append(_render_skeleton(child, indent + 1))
+    return "\n".join(output)
+
+def _render_search(results: List[SearchResult]) -> str:
+    """Renders a simple text list of search results."""
+    if not results:
+        return "No results found matching your query."
+    return "\n".join([f"{r.id}|{r.uid} ({r.type})" for r in results])
+
 @mcp.tool()
 async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False, max_lines: int = 500) -> str:
     """
@@ -169,13 +236,19 @@ async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False, 
     
     try:
         id_list = _parse_list_input(ids)
-        result = await inspect_async(id_list, session.project_dir, include_body, pretty=True)
+        results = await inspect_async(id_list, session.project_dir, include_body)
         
-        lines = str(result).splitlines()
-        if len(lines) > max_lines:
-            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+        rendered_results = []
+        for res in results:
+            rendered_results.append(_render_inspect(res))
             
-        return str(result)
+        final_output = "\n\n".join(rendered_results)
+        
+        lines = final_output.splitlines()
+        if len(lines) > max_lines:
+            final_output = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+            
+        return final_output
     except TostrError as e:
         return f"Error: {e}"
 
@@ -195,13 +268,19 @@ async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False
     
     try:
         uid_list = _parse_list_input(uids)
-        result = await inspect_async(uid_list, session.project_dir, include_body, pretty=True)
+        results = await inspect_async(uid_list, session.project_dir, include_body)
         
-        lines = str(result).splitlines()
-        if len(lines) > max_lines:
-            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+        rendered_results = []
+        for res in results:
+            rendered_results.append(_render_inspect(res))
             
-        return str(result)
+        final_output = "\n\n".join(rendered_results)
+        
+        lines = final_output.splitlines()
+        if len(lines) > max_lines:
+            final_output = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+            
+        return final_output
     except TostrError as e:
         return f"Error: {e}"
 
@@ -237,8 +316,8 @@ async def search(query: str, filter: str = None, top_k: int = 5) -> str:
         return "Error: Tostr is not initialized. You must call 'init' with the absolute workspace path first."
     
     try:
-        result = await search_async(query, session.project_dir, filter_type=filter, top_k=top_k)
-        return str(result)
+        results = await search_async(query, session.project_dir, filter_type=filter, top_k=top_k)
+        return _render_search(results)
     except Exception as e:
         return f"Error: {e}"
 
@@ -258,13 +337,15 @@ async def skeleton(subpath: str, files_only: bool = False, depth: int = 7, max_l
         return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
     
     try:
-        result = await skeleton_async(subpath, session.project_dir, pretty=True, files_only=files_only, depth=depth)
+        result = await skeleton_async(subpath, session.project_dir, files_only=files_only, depth=depth)
         
-        lines = str(result).splitlines()
+        rendered = _render_skeleton(result)
+        
+        lines = rendered.splitlines()
         if len(lines) > max_lines:
-            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
+            rendered = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES] - Use a higher 'max_lines' to see more."
             
-        return str(result)
+        return rendered
     except TostrError as e:
         return f"Error: {e}"
 

@@ -30,6 +30,10 @@ from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, T
 
 import multiprocessing
 
+from tostr.core import InspectResult, SkeletonResult, SearchResult
+from rich.text import Text
+from rich.syntax import Syntax
+from rich.tree import Tree
 
 # Initialize the Typer app
 app = typer.Typer(
@@ -286,6 +290,109 @@ def resolve(
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
 
+def _render_inspect(result: Union[InspectResult, str], pretty: bool = True, language: str = "java"):
+    if isinstance(result, str):
+        console.print(result)
+        return
+
+    # Header
+    header_text = Text()
+    header_text.append(result.id, style="tostr.uid")
+    
+    if result.type in ["BaseClass", "BaseMethod", "BaseField"]:
+        line_info = f" @L{result.start_line}"
+        if result.start_line != result.end_line:
+            line_info += f"-{result.end_line}"
+        header_text.append(line_info, style="tostr.line_num")
+        header_text.append(f" | {result.signature}", style="bold white")
+    else:
+        header_text.append(f" | {result.uid}", style="tostr.uid")
+    
+    console.print(header_text)
+
+    # Description
+    total_children = len(result.fields) + len(result.methods) + len(result.classes) + len(result.files) + len(result.directories)
+    if result.description and total_children != 1:
+        # Simple line wrapping for description
+        desc = f"// {result.description}"
+        console.print(Text(desc, style="tostr.comment"))
+
+    # Edges
+    if result.inbound_edges:
+        edge_text = Text("< ", style="tostr.edge")
+        edge_text.append(", ".join(result.inbound_edges))
+        console.print(edge_text)
+        
+    if result.outbound_edges:
+        edge_text = Text("> ", style="tostr.edge")
+        edge_text.append(", ".join(result.outbound_edges))
+        console.print(edge_text)
+
+    # Fields
+    if result.fields:
+        console.print(Text("fields:", style="tostr.section"))
+        for f in result.fields:
+            console.print(Text(f"    {f.id} | {f.signature}"))
+
+    # Methods
+    if result.methods:
+        console.print(Text("methods:", style="tostr.section"))
+        for m in result.methods:
+            console.print(Text(f"    {m.id} | {m.signature}"))
+            if m.description:
+                console.print(Text(f"        // {m.description}", style="tostr.comment"))
+
+    # Classes
+    if result.classes:
+        console.print(Text("classes:", style="tostr.section"))
+        for c in result.classes:
+            console.print(Text(f"    {c.id} | {c.uid}"))
+            if c.description:
+                console.print(Text(f"        // {c.description}", style="tostr.comment"))
+
+    # Files / Directories recursion (limited to 1 level for inspect usually)
+    if result.files:
+        for f in result.files:
+            console.print(Text(f"File: {f.filepath}", style="bold blue"))
+    
+    if result.directories:
+        for d in result.directories:
+            console.print(Text(f"Directory: {d.filepath}", style="bold yellow"))
+
+    # Body
+    if result.body:
+        syntax = Syntax(result.body, language, theme="monokai", line_numbers=True)
+        console.print(syntax)
+
+def _render_skeleton(result: SkeletonResult, tree: Tree = None) -> Tree:
+    """Recursively builds a Rich Tree for the skeleton."""
+    label = Text()
+    label.append(result.id, style="tostr.uid")
+    label.append(f" | {result.uid}")
+    
+    if tree is None:
+        tree = Tree(label)
+        node = tree
+    else:
+        node = tree.add(label)
+    
+    for child in result.children:
+        _render_skeleton(child, node)
+    return tree
+
+def _render_search(results: List[SearchResult]):
+    if not results:
+        console.print("No results found matching your query.")
+        return
+    
+    for r in results:
+        res_text = Text()
+        res_text.append(r.id, style="tostr.uid")
+        res_text.append(f"|{r.uid} ", style="bold cyan")
+        res_text.append(f"({r.type}) ", style="dim")
+        res_text.append(f"[dist: {r.distance:.4f}]", style="tostr.line_num")
+        console.print(res_text)
+
 @app.command()
 def inspect(
     ids: Annotated[
@@ -336,11 +443,10 @@ def inspect(
     
     start_time = time.perf_counter()
     try:
-        result = asyncio.run(inspect_async(ids, path, include_body=include_body, pretty=pretty))
-        lines = result.splitlines()
-        if len(lines) > max_lines:
-            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES (total: {len(lines)})] - Use a higher '--max-lines <N>' to see more."
-        console.print(result)
+        results = asyncio.run(inspect_async(ids, path, include_body=include_body))
+        for res in results:
+            _render_inspect(res, pretty=pretty)
+            console.print("") # spacing
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
@@ -392,8 +498,8 @@ def search(
     """Search for structs by embedding a search term and finding the top K matches."""
     configure_cli_logging(debug)
     try:
-        result = asyncio.run(search_async(query, path, filter_type=filter, top_k=top_k))
-        console.print(result)
+        results = asyncio.run(search_async(query, path, filter_type=filter, top_k=top_k))
+        _render_search(results)
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
@@ -457,12 +563,9 @@ def skeleton(
     
     start_time = time.perf_counter()
     try:
-        result = asyncio.run(skeleton_async(subpath, path, pretty=pretty, depth=depth, files_only=files_only))
-        lines = result.splitlines()
-        if len(lines) > max_lines:
-            result = "\n".join(lines[:max_lines]) + f"\n...[OUTPUT TRUNCATED AT {max_lines} LINES (total: {len(lines)})] - Use a higher '--max-lines <N>' to see more."
-        # TODO: Add rich.tree for skeleton output readability
-        console.print(result)
+        result = asyncio.run(skeleton_async(subpath, path, depth=depth, files_only=files_only))
+        tree = _render_skeleton(result)
+        console.print(tree)
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
