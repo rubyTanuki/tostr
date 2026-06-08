@@ -22,8 +22,9 @@ class EmbeddingStrategy(ABC):
         pass
 
 class EmbeddingClient:
-    def __init__(self, strategy: EmbeddingStrategy):
+    def __init__(self, strategy: EmbeddingStrategy, progress_tracker: "ProgressTracker" = None):
         self.strategy = strategy
+        self.progress_tracker = progress_tracker
         self.queue = asyncio.Queue() 
         self._worker_task = None
 
@@ -80,6 +81,9 @@ class EmbeddingClient:
 
         for struct, vector in zip(batch, embeddings):
             struct.vector = vector
+
+            if self.progress_tracker:
+                self.progress_tracker.advance('embed', 1)
         
         for _ in batch:
             self.queue.task_done()

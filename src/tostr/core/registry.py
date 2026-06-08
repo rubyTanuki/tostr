@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import hashlib
 import sqlite_vec
+import asyncio
 from loguru import logger
 
 from tostr.core.models import BaseFile, BaseClass, BaseMethod, BaseField, Directory
@@ -20,7 +21,8 @@ if TYPE_CHECKING:
     from tostr.core.models import BaseStruct, BaseCodeStruct
 
 class Registry:
-    def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None):
+    def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None):
+        self.progress_tracker = progress_tracker
         self.project_path = project_path
         self.use_cache = use_cache
         self.uid_map: Dict[str, BaseStruct] = {}
@@ -67,6 +69,15 @@ class Registry:
         """ Adds a struct to the in-memory cache """
         self.uid_map[struct.uid] = struct
         self.id_map[struct.id] = struct
+
+        if self.progress_tracker:
+            # All structs undergo dependency resolution
+            self.progress_tracker.enqueue('resolve', 1)
+
+            # Only track describing and embedding for non-field structs
+            if not isinstance(struct, BaseField):
+                self.progress_tracker.enqueue('describe', 1)
+                self.progress_tracker.enqueue('embed', 1)
         
     def resolve_methods(self, name: str, arity: int, parent_name: Optional[str] = None):
         if parent_name:

@@ -18,22 +18,22 @@ def _verify_db_exists(target_path: Path):
     if not os.path.exists(target_path):
         raise DatabaseNotFoundError("Database not found. Run 'tostr init' first.")
 
-def get_llm_client():
+def get_llm_client(progress_tracker: "ProgressTracker" = None):
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     if GEMINI_API_KEY is None:
         raise APIKeyError("API key not found.")
     
     strategy = GeminiStrategy(api_key=GEMINI_API_KEY)
-    return LLMClient(strategy=strategy)
+    return LLMClient(strategy=strategy, progress_tracker=progress_tracker)
 
 @lru_cache(maxsize=1)
-def get_cached_embedding_client():
+def get_cached_embedding_client(progress_tracker: "ProgressTracker" = None):
     """
     Guarantees the model graph is initialized exactly once 
     per long-running process lifecycle.
     """
     strategy = OnnxEmbeddingStrategy()
-    return EmbeddingClient(strategy=strategy)
+    return EmbeddingClient(strategy=strategy, progress_tracker=progress_tracker)
 
 def clean_db(target_path: Path):
     if os.path.exists(target_path / ".tostr"):
@@ -72,11 +72,11 @@ def get_status(target_path: Path) -> dict:
 
     return status
 
-async def _build_ast_async(target_path: Path, use_cache: bool = True) -> BaseParser:
-    llm = get_llm_client()
-    embedder = get_cached_embedding_client()
+async def _build_ast_async(target_path: Path, use_cache: bool = True, progress_tracker: "ProgressTracker" = None) -> BaseParser:
+    llm = get_llm_client(progress_tracker=progress_tracker)
+    embedder = get_cached_embedding_client(progress_tracker=progress_tracker)
     db = SQLiteCache(target_path / ".tostr" / "cache.db")
-    registry = Registry(use_cache=use_cache, db=db, project_path=target_path)
+    registry = Registry(use_cache=use_cache, db=db, project_path=target_path, progress_tracker=progress_tracker)
     logger.info("Building AST...")
     
     parser = BaseParser(target_path, llm, embedder, registry)
@@ -106,14 +106,14 @@ def _write_default_ignore(target_path: Path, ignore_type: str):
     else:
         logger.warning(f"No default ignore template found for {ignore_type} at {template_path}")
 
-async def init_async(target_path: Path, use_cache: bool = True, ignore: str = None):
+async def init_async(target_path: Path, use_cache: bool = True, ignore: str = None, progress_tracker: "ProgressTracker" = None):
     """Core asynchronous logic for scraping and parsing."""
     
     if ignore:
         _write_default_ignore(target_path, ignore)
 
     # Parse and resolve AST
-    parser = await _build_ast_async(target_path, use_cache=use_cache)
+    parser = await _build_ast_async(target_path, use_cache=use_cache, progress_tracker=progress_tracker)
         
     # Write Cache
     parser.registry.save_to_cache()

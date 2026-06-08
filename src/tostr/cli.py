@@ -21,6 +21,8 @@ from tostr.commands import (
 from tostr.server import mcp
 
 from tostr.core.utils.logger import configure_cli_logging
+from tostr.core.utils.progress import ProgressTracker
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
 
 import multiprocessing
 
@@ -194,15 +196,27 @@ def init(
     """Parse files and setup SQLite database."""
     configure_cli_logging(debug)
     start_time = time.perf_counter()
+    typer.echo(f"Parsing and describing files...")
     try:
-        asyncio.run(init_async(path, use_cache, ignore))
+        if debug:
+            asyncio.run(init_async(path, use_cache, ignore, None))
+        else:
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+            ) as progress:
+                progress_tracker = ProgressTracker(progress)
+                asyncio.run(init_async(path, use_cache, ignore, progress_tracker))
+                progress_tracker.finish()
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
     
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
-    logger.debug(f"Finished in {elapsed_time:.4f} seconds.")
+    typer.echo(f"✅ Finished initializing project in {elapsed_time:.4f} seconds.")
 
 
 @app.command()

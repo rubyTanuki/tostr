@@ -34,8 +34,9 @@ class LLMStrategy(ABC):
         pass
 
 class LLMClient:
-    def __init__(self, strategy: LLMStrategy):
+    def __init__(self, strategy: LLMStrategy, progress_tracker: "ProgressTracker" = None):
         self.strategy = strategy
+        self.progress_tracker = progress_tracker
 
     async def generate_description(self, input_data: dict, system_prompt: str, response_schema: Type[BaseModel]) -> BaseModel | None:
         input_data_string = json.dumps(input_data)
@@ -55,6 +56,11 @@ class LLMClient:
                     
                     elapsed_time = time.perf_counter() - start_time
                     logger.debug(f"LLM Generation successful in {elapsed_time:.4f} seconds")
+
+                    if self.progress_tracker:
+                        # Advance once for the primary struct being processed in this call
+                        self.progress_tracker.advance('describe', 1)
+
                     return result
                     
                 except Exception as e:

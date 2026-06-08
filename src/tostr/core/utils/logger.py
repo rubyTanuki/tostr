@@ -31,9 +31,7 @@ def configure_cli_logging(debug: bool = False):
     logger.remove()
     if debug:
         logger.add(sys.stdout, level="DEBUG", enqueue=True)
-    else:
         logger.add(sys.stdout, level="INFO", enqueue=True)
-        # logger.add(sys.stderr, level="DEBUG", enqueue=True)
 
 def configure_mcp_logging(project_dir: Path | str):
     """

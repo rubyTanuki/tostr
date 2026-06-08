@@ -14,6 +14,7 @@ from tostr.exceptions import LanguageNotSupportedError
 
 from tostr.semantic.llm import CLASS_SYSTEM_INSTRUCTION, FILE_SYSTEM_INSTRUCTION, DIRECTORY_SYSTEM_INSTRUCTION
 
+
 if TYPE_CHECKING:
     from tostr.core.registry import Registry
 
@@ -178,7 +179,10 @@ class BaseStruct(ABC):
         for child_set in list(self.children.values()):
             for child in list(child_set):
                 child.resolve_dependencies()
-    
+        
+        if self.registry and self.registry.progress_tracker:
+            self.registry.progress_tracker.advance('resolve', 1)
+
     @abstractmethod
     async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         pass
@@ -234,7 +238,16 @@ class Directory(BaseStruct):
     
     async def resolve_description_async(self, llm: LLMClient = None, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
-        if self.description: return
+        
+        if self.description:
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1)
+                if self.vector is not None:
+                    self.registry.progress_tracker.advance('embed', 1)
+                elif embedder:
+                    embedder.enqueue(self)
+            return
+
         if self.all_children:
             coroutine_list = [
                 child.resolve_description_async(llm, embedder) 
@@ -244,9 +257,15 @@ class Directory(BaseStruct):
 
         if len(self.all_children) == 0:
             self.description = "Empty Directory"
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1)
+                self.registry.progress_tracker.advance('embed', 1)
             return
         if len(self.all_children) == 1:
             self.description = self.all_children[0].description
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1)
+                self.registry.progress_tracker.advance('embed', 1)
             return
         
         logger.debug(f"Generating Description for directory {self.uid}...")
@@ -266,6 +285,8 @@ class Directory(BaseStruct):
 
         if not response:
             logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('embed', 1)
             return
 
         self.description = response.description
@@ -335,7 +356,16 @@ class BaseFile(BaseStruct):
     
     async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
-        if self.description: return
+        
+        if self.description:
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1)
+                if self.vector is not None:
+                    self.registry.progress_tracker.advance('embed', 1)
+                elif embedder:
+                    embedder.enqueue(self)
+            return
+
         if self.all_children:
             coroutine_list = [
                 child.resolve_description_async(llm, embedder) 
@@ -345,10 +375,16 @@ class BaseFile(BaseStruct):
 
         if len(self.all_children) == 0:
             self.description = "Empty File"
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1)
+                self.registry.progress_tracker.advance('embed', 1)
             return
         if len(self.all_children) == 1:
             self.description = self.all_children[0].description
             self.vector = self.all_children[0].vector
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1)
+                self.registry.progress_tracker.advance('embed', 1)
             return
         
         logger.debug(f"Generating Description for file {self.uid}...")
@@ -368,6 +404,8 @@ class BaseFile(BaseStruct):
 
         if not response:
             logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('embed', 1)
             return
 
         self.description = response.description
@@ -496,6 +534,8 @@ class BaseClass(BaseCodeStruct):
         if not hasattr(self, 'node') or not self.node:
             raise ValueError("Node reference is required for skeletonization.")
         
+        from tostr.core.serializer import tost, Verbosity
+
         result_bytes = self.node.text
         start_byte = self.node.start_byte
         
@@ -511,7 +551,7 @@ class BaseClass(BaseCodeStruct):
             
             rel_start = child.node.start_byte - start_byte
             rel_end = child.node.end_byte - start_byte
-            method_skeleton = tost.dump(child, verbosity=tost.VERBOSITY.SKELETON, pretty=False)
+            method_skeleton = tost.dump(child, verbosity=Verbosity.SKELETON, pretty=False)
             skeleton_bytes = method_skeleton.encode('utf-8')
             result_bytes = result_bytes[:rel_start] + skeleton_bytes + result_bytes[rel_end:]
             
@@ -519,12 +559,48 @@ class BaseClass(BaseCodeStruct):
     
     async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
-        if self.description: return
+        
+        # 1. Handle Children Recursion (e.g., nested classes)
+        if self.all_children:
+            coroutine_list = [
+                child.resolve_description_async(llm, embedder) 
+                for child in self.all_children
+                if not isinstance(child, BaseMethod) # Methods are handled by this class below
+            ]
+            if coroutine_list:
+                await asyncio.gather(*coroutine_list)
 
+        # 2. If already described, account for ourselves and our methods and exit
+        if self.description:
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1 + len(self.methods))
+                if self.vector is not None:
+                    self.registry.progress_tracker.advance('embed', 1)
+                elif embedder:
+                    embedder.enqueue(self)
+                
+                for m in self.methods:
+                    if m.vector is not None:
+                        self.registry.progress_tracker.advance('embed', 1)
+                    elif embedder:
+                        embedder.enqueue(m)
+            return
+
+        # 3. Process this class and its methods
         logger.debug(f"Generating Description for class {self.uid}...")
 
-        method_lookup = {idx: m for idx, m in enumerate(self.methods) if m.description is not None}
+        method_lookup = {idx: m for idx, m in enumerate(self.methods) if m.description is None}
         
+        # Account for methods that already have descriptions
+        already_described = [m for m in self.methods if m.description is not None]
+        if self.registry and self.registry.progress_tracker and already_described:
+            self.registry.progress_tracker.advance('describe', len(already_described))
+            for m in already_described:
+                if m.vector is not None:
+                    self.registry.progress_tracker.advance('embed', 1)
+                elif embedder:
+                    embedder.enqueue(m)
+
         input_data = {
             "code": self.skeletonize(),
             "method_ids_to_signatures": {idx: m.signature for idx, m in method_lookup.items()}
@@ -542,6 +618,9 @@ class BaseClass(BaseCodeStruct):
 
         if not response:
             logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
+            if self.registry and self.registry.progress_tracker:
+                self.registry.progress_tracker.advance('describe', 1 + len(method_lookup))
+                self.registry.progress_tracker.advance('embed', 1 + len(method_lookup))
             return
 
         self.description = response.description
@@ -549,12 +628,20 @@ class BaseClass(BaseCodeStruct):
         if embedder is not None:
             embedder.enqueue(self)
 
+        handled_indices = set()
         for idx, desc in response.description_map.items():
             if idx in method_lookup:
                 method = method_lookup[idx]
                 method.description = desc
+                handled_indices.add(idx)
                 if embedder is not None:
                     embedder.enqueue(method)
+
+        # Handle any methods that were sent but not described by the LLM
+        missed_count = len(method_lookup) - len(handled_indices)
+        if missed_count > 0 and self.registry and self.registry.progress_tracker:
+            self.registry.progress_tracker.advance('describe', missed_count)
+            self.registry.progress_tracker.advance('embed', missed_count)
 
         logger.debug(f"Successfully Generated Description for class {self.uid}")
             
@@ -580,8 +667,14 @@ class BaseMethod(BaseCodeStruct):
     # def _parse_dependencies(self):
     #     pass
 
-    def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
-        pass
+    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
+        # Methods are usually handled by their parent class, but we handle direct calls for robustness.
+        if self.registry and self.registry.progress_tracker:
+            self.registry.progress_tracker.advance('describe', 1)
+            if self.vector is not None:
+                self.registry.progress_tracker.advance('embed', 1)
+            elif embedder:
+                embedder.enqueue(self)
     
     def resolve_dependencies(self):
         logger.debug(f"Resolving dependencies for method {self.uid}")
@@ -666,7 +759,10 @@ class BaseMethod(BaseCodeStruct):
                     else:
                         for c in all_candidates:
                             self.add_fuzzy_dependency(c)
-    
+        
+        if self.registry and self.registry.progress_tracker:
+            self.registry.progress_tracker.advance('resolve', 1)
+
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "method"
@@ -685,7 +781,7 @@ class BaseField(BaseCodeStruct):
     # def _parse_dependencies(self):
     #     pass
 
-    def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
+    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         pass
     
     def to_dict(self) -> dict:
