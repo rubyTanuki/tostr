@@ -14,7 +14,7 @@ class MockStrategy(LLMStrategy):
         if "description" in response_schema.model_fields:
             data["description"] = "Mock class description"
         if "description_map" in response_schema.model_fields:
-            data["description_map"] = {0: "Mock method description"}
+            data["description_map"] = {"0": "Mock method description"}
         return response_schema(**data)
 
 @pytest.mark.asyncio

@@ -240,7 +240,7 @@ class Directory(BaseStruct):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
         
         if self.description:
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1)
                 if self.vector is not None:
                     self.registry.progress_tracker.advance('embed', 1)
@@ -257,13 +257,13 @@ class Directory(BaseStruct):
 
         if len(self.all_children) == 0:
             self.description = "Empty Directory"
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1)
                 self.registry.progress_tracker.advance('embed', 1)
             return
         if len(self.all_children) == 1:
             self.description = self.all_children[0].description
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1)
                 self.registry.progress_tracker.advance('embed', 1)
             return
@@ -285,7 +285,7 @@ class Directory(BaseStruct):
 
         if not response:
             logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('embed', 1)
             return
 
@@ -358,7 +358,7 @@ class BaseFile(BaseStruct):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
         
         if self.description:
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1)
                 if self.vector is not None:
                     self.registry.progress_tracker.advance('embed', 1)
@@ -375,14 +375,14 @@ class BaseFile(BaseStruct):
 
         if len(self.all_children) == 0:
             self.description = "Empty File"
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1)
                 self.registry.progress_tracker.advance('embed', 1)
             return
         if len(self.all_children) == 1:
             self.description = self.all_children[0].description
             self.vector = self.all_children[0].vector
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1)
                 self.registry.progress_tracker.advance('embed', 1)
             return
@@ -404,7 +404,7 @@ class BaseFile(BaseStruct):
 
         if not response:
             logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('embed', 1)
             return
 
@@ -572,7 +572,7 @@ class BaseClass(BaseCodeStruct):
 
         # 2. If already described, account for ourselves and our methods and exit
         if self.description:
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1 + len(self.methods))
                 if self.vector is not None:
                     self.registry.progress_tracker.advance('embed', 1)
@@ -589,11 +589,11 @@ class BaseClass(BaseCodeStruct):
         # 3. Process this class and its methods
         logger.debug(f"Generating Description for class {self.uid}...")
 
-        method_lookup = {idx: m for idx, m in enumerate(self.methods) if m.description is None}
+        method_lookup = {idx: m for idx, m in enumerate(self.methods) if not m.description}
         
         # Account for methods that already have descriptions
-        already_described = [m for m in self.methods if m.description is not None]
-        if self.registry and self.registry.progress_tracker and already_described:
+        already_described = [m for m in self.methods if m.description]
+        if self.registry and getattr(self.registry, "progress_tracker", None) and already_described:
             self.registry.progress_tracker.advance('describe', len(already_described))
             for m in already_described:
                 if m.vector is not None:
@@ -603,12 +603,12 @@ class BaseClass(BaseCodeStruct):
 
         input_data = {
             "code": self.skeletonize(),
-            "method_ids_to_signatures": {idx: m.signature for idx, m in method_lookup.items()}
+            "method_ids_to_signatures": {str(idx): m.signature for idx, m in method_lookup.items()}
         }
 
         class ClassDescriptionSchema(BaseModel):
             description: str = Field(description="Description of the class")
-            description_map: dict[int, str] = Field(default_factory=dict, description="Mapping of method_id to method")
+            description_map: dict[str, str] = Field(default_factory=dict, description="Mapping of method_id to method")
 
         response = await llm.generate_description(
             input_data=input_data,
@@ -618,7 +618,7 @@ class BaseClass(BaseCodeStruct):
 
         if not response:
             logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
-            if self.registry and self.registry.progress_tracker:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1 + len(method_lookup))
                 self.registry.progress_tracker.advance('embed', 1 + len(method_lookup))
             return
@@ -629,7 +629,11 @@ class BaseClass(BaseCodeStruct):
             embedder.enqueue(self)
 
         handled_indices = set()
-        for idx, desc in response.description_map.items():
+        for idx_str, desc in response.description_map.items():
+            try:
+                idx = int(idx_str)
+            except (ValueError, TypeError):
+                continue
             if idx in method_lookup:
                 method = method_lookup[idx]
                 method.description = desc
@@ -637,9 +641,12 @@ class BaseClass(BaseCodeStruct):
                 if embedder is not None:
                     embedder.enqueue(method)
 
+        if handled_indices and self.registry and getattr(self.registry, "progress_tracker", None):
+            self.registry.progress_tracker.advance('describe', len(handled_indices))
+
         # Handle any methods that were sent but not described by the LLM
         missed_count = len(method_lookup) - len(handled_indices)
-        if missed_count > 0 and self.registry and self.registry.progress_tracker:
+        if missed_count > 0 and self.registry and getattr(self.registry, "progress_tracker", None):
             self.registry.progress_tracker.advance('describe', missed_count)
             self.registry.progress_tracker.advance('embed', missed_count)
 
@@ -669,7 +676,7 @@ class BaseMethod(BaseCodeStruct):
 
     async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         # Methods are usually handled by their parent class, but we handle direct calls for robustness.
-        if self.registry and self.registry.progress_tracker:
+        if self.registry and getattr(self.registry, "progress_tracker", None):
             self.registry.progress_tracker.advance('describe', 1)
             if self.vector is not None:
                 self.registry.progress_tracker.advance('embed', 1)
