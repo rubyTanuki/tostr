@@ -16,6 +16,7 @@ class BaseParser(ABC):
         self.llm = llm
         self.embedder = embedder
         self.registry = registry
+        self.langs_with_dependency_support = {"java"}
     
     @property
     def files(self):
@@ -28,7 +29,10 @@ class BaseParser(ABC):
             subpath = Path(subpath)
 
         self.parse_path(subpath)
-        self.resolve_dependencies()
+
+        if self.registry.language in self.langs_with_dependency_support:
+            self.resolve_dependencies()
+
         await self.resolve_descriptions_async()
         
     def parse_path(self, subpath: Path, parent: Directory = None):

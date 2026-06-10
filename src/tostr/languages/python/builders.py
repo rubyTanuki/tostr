@@ -47,52 +47,52 @@ class PythonFileBuilder(BaseFileBuilder):
         
         self._parse_children(file_obj.node, file_obj)
         
-        # Parse imports
-        for child in file_obj.node.children:
-            if child.type == "import_statement":
-                # import x, y as z
-                for dotted_name in child.children_by_field_name("name"):
-                    imports.append(dotted_name.text.decode('utf-8'))
-            elif child.type == "import_from_statement":
-                # from x import y, z
-                module_name = ""
-                module_node = child.child_by_field_name("module_name")
-                relative_import_node = child.child_by_field_name("relative_import")
+        # # Parse imports
+        # for child in file_obj.node.children:
+        #     if child.type == "import_statement":
+        #         # import x, y as z
+        #         for dotted_name in child.children_by_field_name("name"):
+        #             imports.append(dotted_name.text.decode('utf-8'))
+        #     elif child.type == "import_from_statement":
+        #         # from x import y, z
+        #         module_name = ""
+        #         module_node = child.child_by_field_name("module_name")
+        #         relative_import_node = child.child_by_field_name("relative_import")
 
-                if module_node:
-                    module_name = module_node.text.decode('utf-8')
-                elif relative_import_node:
-                    prefix_node = relative_import_node.child_by_field_name("prefix")
-                    dotted_name_node = relative_import_node.child_by_field_name("name")
+        #         if module_node:
+        #             module_name = module_node.text.decode('utf-8')
+        #         elif relative_import_node:
+        #             prefix_node = relative_import_node.child_by_field_name("prefix")
+        #             dotted_name_node = relative_import_node.child_by_field_name("name")
                     
-                    dots = prefix_node.text.decode('utf-8') if prefix_node else ""
-                    dotted_part = dotted_name_node.text.decode('utf-8') if dotted_name_node else ""
+        #             dots = prefix_node.text.decode('utf-8') if prefix_node else ""
+        #             dotted_part = dotted_name_node.text.decode('utf-8') if dotted_name_node else ""
                     
-                    # Resolve relative path
-                    num_dots = dots.count('.')
-                    if num_dots > 0 and file_obj.package:
-                        parts = file_obj.package.split('.')
-                        base_parts = parts[:-num_dots] if num_dots <= len(parts) else []
-                        module_name = ".".join(base_parts + ([dotted_part] if dotted_part else []))
-                    else:
-                        module_name = dotted_part
+        #             # Resolve relative path
+        #             num_dots = dots.count('.')
+        #             if num_dots > 0 and file_obj.package:
+        #                 parts = file_obj.package.split('.')
+        #                 base_parts = parts[:-num_dots] if num_dots <= len(parts) else []
+        #                 module_name = ".".join(base_parts + ([dotted_part] if dotted_part else []))
+        #             else:
+        #                 module_name = dotted_part
 
-                if module_name:
-                    # Look for imported names
-                    has_wildcard = any(gc.type == "wildcard_import" for gc in child.children)
-                    if has_wildcard:
-                        imports.append(f"{module_name}.*")
-                    else:
-                        for gc in child.named_children:
-                            if gc.type in {"aliased_import", "dotted_name", "identifier"}:
-                                if gc == module_node or gc == relative_import_node:
-                                    continue
+        #         if module_name:
+        #             # Look for imported names
+        #             has_wildcard = any(gc.type == "wildcard_import" for gc in child.children)
+        #             if has_wildcard:
+        #                 imports.append(f"{module_name}.*")
+        #             else:
+        #                 for gc in child.named_children:
+        #                     if gc.type in {"aliased_import", "dotted_name", "identifier"}:
+        #                         if gc == module_node or gc == relative_import_node:
+        #                             continue
                                 
-                                name_node = gc.child_by_field_name("name") or gc
-                                imp_name = name_node.text.decode('utf-8')
-                                imports.append(f"{module_name}.{imp_name}")
+        #                         name_node = gc.child_by_field_name("name") or gc
+        #                         imp_name = name_node.text.decode('utf-8')
+        #                         imports.append(f"{module_name}.{imp_name}")
         
-        file_obj.imports = list(set(imports))
+        # file_obj.imports = list(set(imports))
         return file_obj
 
     def _parse_children(self, node: Node, parent: BaseStruct):
@@ -222,20 +222,20 @@ class PythonMethodBuilder(BaseMethodBuilder):
             uid = f"{name}{parameters_string}"
 
         dependency_names = []
-        query = Query(PYTHON_LANGUAGE, DEPENDENCY_QUERY)
-        cursor = QueryCursor(query)
-        matches = cursor.matches(node)
-        for _, captures in matches:
-            if "method_call" in captures:
-                name_node = captures.get("name")[0]
-                dep_name = name_node.text.decode('utf-8').strip()
-                args_node = captures.get("args")[0]
-                dep_arity = len(args_node.named_children)
-                receiver = captures.get("receiver")[0].text.decode('utf-8').strip() if "receiver" in captures else None
+        # query = Query(PYTHON_LANGUAGE, DEPENDENCY_QUERY)
+        # cursor = QueryCursor(query)
+        # matches = cursor.matches(node)
+        # for _, captures in matches:
+        #     if "method_call" in captures:
+        #         name_node = captures.get("name")[0]
+        #         dep_name = name_node.text.decode('utf-8').strip()
+        #         args_node = captures.get("args")[0]
+        #         dep_arity = len(args_node.named_children)
+        #         receiver = captures.get("receiver")[0].text.decode('utf-8').strip() if "receiver" in captures else None
                 
-                # In Python, we don't know if it's object creation or method call.
-                # We'll mark is_creation=False and let resolver try both.
-                dependency_names.append((dep_name, dep_arity, receiver, False))
+        #         # In Python, we don't know if it's object creation or method call.
+        #         # We'll mark is_creation=False and let resolver try both.
+        #         dependency_names.append((dep_name, dep_arity, receiver, False))
         
         return BaseMethod(
             name=name,
