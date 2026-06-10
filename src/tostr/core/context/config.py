@@ -59,12 +59,24 @@ class ProjectConfig:
         return pathspec.PathSpec.from_lines('gitignore', [])
 
     def is_ignored(self, file_path: Path) -> bool:
+        if not self.project_path:
+            return False
+
         # 1. Convert to a POSIX string relative to the project root
         try:
-            relative_path = file_path.resolve().relative_to(self.project_path.resolve()).as_posix()
+            # We prefer absolute() over resolve() to avoid following symlinks 
+            # that point outside the project tree during logical traversal.
+            relative_path = file_path.absolute().relative_to(self.project_path.absolute()).as_posix()
         except ValueError:
-            # If the file is outside the project root, we should probably ignore it
-            return True
+            # Fallback to resolve() if they are in different places but logically linked
+            try:
+                relative_path = file_path.resolve().relative_to(self.project_path.resolve()).as_posix()
+            except ValueError:
+                # If the file is outside the project root, we should probably ignore it
+                return True
+
+        if relative_path == ".":
+            return False
 
         # If it's a directory, append a slash so directory-only rules (like `dist/`) can match it
         if file_path.is_dir() and not relative_path.endswith('/'):
