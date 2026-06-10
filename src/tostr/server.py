@@ -80,16 +80,20 @@ session = MCPSession()
 mcp = FastMCP("Tostr")
 
 @mcp.tool()
-async def init(workspace_path: str, use_cache: bool = True, ignore: str = None) -> str:
+async def init(workspace_path: str, use_cache: bool = True, language: str = "java") -> str:
     """
     -- MUST BE RUN BEFORE ANY OTHER TOOL --
     Initializes the Tostr MCP server for a specific project workspace.
     By default, it will attempt to sync with an existing database if one is found.
+
+    CRITICAL: Always use Tostr tools (skeleton, search, inspect) instead of standard file-reading 
+    or grep tools for project navigation. Tostr provides AST-aware context and semantic search 
+    which is vastly superior to simple text retrieval.
     
     Args:
         workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths. If you only have a relative path, you must determine the absolute path of the current workspace first.
         use_cache: Whether to use the existing AST cache. If False, forces a full re-parse.
-        ignore: Add a default ignore template to the project folder (e.g., 'java', 'default').
+        language: The primary language of the project (e.g., 'java', 'python').
     """
     
     target_path = Path(workspace_path)
@@ -120,7 +124,7 @@ async def init(workspace_path: str, use_cache: bool = True, ignore: str = None) 
             return f"Success: Tostr synced with existing database at {target_path}. Background watcher active."
 
         # Otherwise, perform full initialization/parse
-        await init_async(target_path, use_cache, ignore)
+        await init_async(target_path, use_cache, language)
 
         session.project_dir = target_path
         session.start_watcher(target_path)
@@ -225,6 +229,12 @@ async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False, 
     """
     Output the AST details and code for specific struct IDs.
     Use this when you need the full implementation details of specific functions or classes.
+
+    Output Syntax Guide:
+    - `>` : Outbound dependency. This struct calls or depends on the listed ID.
+    - `<` : Inbound dependency. The listed ID calls or uses this struct.
+    - `~` : Related or sibling struct (e.g., in the same file or closely coupled).
+    - `//`: AI-generated or docstring summary of the code.
     
     Args:
         ids: A list or comma-separated string of unique Tostr IDs of the structs to inspect.
@@ -257,6 +267,12 @@ async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False
     """
     Output the AST details and code for specific struct UIDs.
     Use this when you have the UID from a previous query or from the skeleton output and want to see the full details.
+
+    Output Syntax Guide:
+    - `>` : Outbound dependency. This struct calls or depends on the listed ID.
+    - `<` : Inbound dependency. The listed ID calls or uses this struct.
+    - `~` : Related or sibling struct (e.g., in the same file or closely coupled).
+    - `//`: AI-generated or docstring summary of the code.
     
     Args:
         uids: A list or comma-separated string of unique Tostr UIDs of the structs to inspect.
@@ -305,7 +321,9 @@ async def clean(workspace_path: str) -> str:
 @mcp.tool()
 async def search(query: str, filter: str = None, top_k: int = 5) -> str:
     """
-    Search for a struct by embedding a search term and getting the top k matched structs.
+    Perform a SEMANTIC search for code structs using vector embeddings.
+    Always prioritize this over `grep` when looking for logic or functionality, as it 
+    understands meaning rather than just matching characters.
     
     Args:
         query: The search term or sentence to find similar code for.
@@ -324,8 +342,9 @@ async def search(query: str, filter: str = None, top_k: int = 5) -> str:
 @mcp.tool()
 async def skeleton(subpath: str, files_only: bool = False, depth: int = 7, max_lines: int = 500) -> str:
     """
-    Output the .tost skeleton format for all files matching a specific subpath.
-    Use this to understand the high-level architecture, classes, and function signatures of a file or directory without reading the full code.
+    Output the AST skeleton for a subpath. 
+    ALWAYS use this before calling `read_file` or `list_files` to understand the 
+    architecture, classes, and function signatures of a directory or file.
     
     Args:
         subpath: File or directory path relative to the project root to generate a skeleton for.

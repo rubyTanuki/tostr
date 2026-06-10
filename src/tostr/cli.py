@@ -3,7 +3,7 @@ import asyncio
 import time
 from pathlib import Path
 import typer
-from typing import Annotated, List
+from typing import Annotated, List, Union
 from loguru import logger
 from tostr.exceptions import TostrError
 
@@ -211,14 +211,14 @@ def init(
             help="Load cache if it exists"
             )
         ] = True,
-    ignore: Annotated[
+    language: Annotated[
         str,
         typer.Option(
-            "--ignore",
-            "-i",
-            help="Add a default ignore template to the project folder (e.g., 'java', 'default')"
+            "--language",
+            "-l",
+            help="The primary language of the project (e.g., 'java', 'python')"
         )
-    ] = None,
+    ] = "java",
     debug: Annotated[
         bool, 
         typer.Option(
@@ -234,7 +234,7 @@ def init(
     typer.echo(f"Parsing and describing files...")
     try:
         if debug:
-            asyncio.run(init_async(path, use_cache, ignore, None))
+            asyncio.run(init_async(path, use_cache, language, None))
         else:
             with Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -242,8 +242,9 @@ def init(
                 TaskProgressColumn(),
                 TimeElapsedColumn(),
             ) as progress:
-                progress_tracker = ProgressTracker(progress)
-                asyncio.run(init_async(path, use_cache, ignore, progress_tracker))
+                resolvable: bool = language in {"java"}
+                progress_tracker = ProgressTracker(progress, include_resolve=resolvable)
+                asyncio.run(init_async(path, use_cache, language, progress_tracker))
                 progress_tracker.finish()
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)

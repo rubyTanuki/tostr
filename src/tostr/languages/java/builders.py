@@ -2,6 +2,7 @@ from __future__ import annotations
 from tree_sitter import Parser, Node, Query, QueryCursor
 from pathlib import Path
 import hashlib
+import re
 
 from tostr.core.registry import Registry
 from tostr.languages.java.language import JAVA_LANGUAGE
@@ -10,7 +11,9 @@ from tostr.languages.java.queries import DEPENDENCY_QUERY
 from tostr.core.models import *
 
 class JavaBuilder(BaseBuilder):
-    
+    def handles_extension(self, ext: str) -> bool:
+        return ext.lower() == ".java"
+
     def build_file(self) -> JavaFileBuilder: 
         return JavaFileBuilder(self.registry)
     def build_class(self) -> JavaClassBuilder: 
@@ -212,7 +215,12 @@ class JavaMethodBuilder(BaseMethodBuilder):
                 if param_child.type == 'formal_parameter':
                     param_type_node = param_child.child_by_field_name('type')
                     if param_type_node:
-                        parameters.append(param_type_node.text.decode('utf-8').strip())
+                        param_text = param_type_node.text.decode('utf-8').strip()
+                        # Collapse whitespace/newlines and truncate long types
+                        param_text = re.sub(r'\s+', ' ', param_text)
+                        if len(param_text) > 50:
+                            param_text = param_text[:47] + "..."
+                        parameters.append(param_text)
             
         arity = len(parameters)
         parameters_string = f"({', '.join(parameters)})"

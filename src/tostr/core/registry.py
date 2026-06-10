@@ -1,6 +1,6 @@
 from __future__ import annotations
 from collections import defaultdict
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional, TYPE_CHECKING, Set
 from pathlib import Path
 import json
 import hashlib
@@ -12,13 +12,11 @@ from tostr.core.models import BaseFile, BaseClass, BaseMethod, BaseField, Direct
 from tostr.core.db import SQLiteCache
 from tostr.core.builders import BaseBuilder
 from tostr.core.context.config import ProjectConfig
-
-import json
-import hashlib
-from loguru import logger
+from tostr.core.resolver import BaseDependencyResolver
 
 if TYPE_CHECKING:
     from tostr.core.models import BaseStruct, BaseCodeStruct
+    from tostr.core.utils.progress import ProgressTracker
 
 class Registry:
     def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None):
@@ -32,7 +30,18 @@ class Registry:
         self.root: Optional[BaseStruct] = None
         self.db = db
         self.config = ProjectConfig(project_path) if project_path else None
+        self._resolver = None
+
+    def get_resolver(self) -> BaseDependencyResolver:
+        if self._resolver is None:
+            from tostr.core.providers import LanguageProvider
+            self._resolver = LanguageProvider.get_resolver(self)
+        return self._resolver
     
+    @property
+    def language(self) -> str:
+        return self.config.language if self.config else "java"
+
     @property
     def files(self) -> List[BaseFile]:
         return [x for x in self.uid_map.values() if isinstance(x, BaseFile)]
@@ -79,7 +88,7 @@ class Registry:
                 self.progress_tracker.enqueue('describe', 1)
                 self.progress_tracker.enqueue('embed', 1)
         
-    def resolve_methods(self, name: str, arity: int, parent_name: Optional[str] = None):
+    def resolve_methods(self, name: str, arity: Optional[int], parent_name: Optional[str] = None):
         if parent_name:
             if parent_name.endswith(".*"):
                 package_name = parent_name[:-2]
@@ -94,24 +103,25 @@ class Registry:
                 return self._resolve_methods_recursive(parent, name, arity, set())
             return []
             
-        return [x for x in self.methods if x.name == name and x.arity == arity]
+        return [x for x in self.methods if x.name == name and (arity is None or x.arity == arity)]
 
-    def _resolve_methods_recursive(self, struct: BaseStruct, name: str, arity: int, visited: set) -> List[BaseMethod]:
+    def _resolve_methods_recursive(self, struct: BaseStruct, name: str, arity: Optional[int], visited: set) -> List[BaseMethod]:
         if struct.uid in visited: return []
         visited.add(struct.uid)
 
-        matches = [x for x in struct.methods if x.name == name and x.arity == arity]
+        matches = [x for x in struct.methods if x.name == name and (arity is None or x.arity == arity)]
         if matches: return matches
 
         # 2. Inherited methods
         if hasattr(struct, 'inherits') and struct.inherits:
             for parent_name in struct.inherits:
                 # Use the class's own resolution logic to find the parent struct
-                if hasattr(struct, 'resolve_type'):
-                    parent = struct.resolve_type(parent_name)
-                    if parent:
-                        inherited_matches = self._resolve_methods_recursive(parent, name, arity, visited)
-                        if inherited_matches: return inherited_matches
+                # We use the resolver instead of model-specific resolve_type
+                resolver = self.get_resolver()
+                parent = resolver.resolve_type(struct, parent_name)
+                if parent:
+                    inherited_matches = self._resolve_methods_recursive(parent, name, arity, visited)
+                    if inherited_matches: return inherited_matches
         
         return []
 

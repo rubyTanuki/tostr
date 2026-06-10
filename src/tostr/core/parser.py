@@ -7,7 +7,7 @@ from loguru import logger
 
 from tostr.core.models import BaseFile, Directory, BaseStruct
 from tostr.core.registry import Registry
-from tostr.core.providers import StructBuilderProvider
+from tostr.core.providers import LanguageProvider
 from tostr.exceptions import LanguageNotSupportedError
 
 class BaseParser(ABC):
@@ -16,6 +16,7 @@ class BaseParser(ABC):
         self.llm = llm
         self.embedder = embedder
         self.registry = registry
+        self.langs_with_dependency_support = {"java"}
     
     @property
     def files(self):
@@ -28,10 +29,17 @@ class BaseParser(ABC):
             subpath = Path(subpath)
 
         self.parse_path(subpath)
-        self.resolve_dependencies()
+
+        if self.registry.language in self.langs_with_dependency_support:
+            self.resolve_dependencies()
+
         await self.resolve_descriptions_async()
         
     def parse_path(self, subpath: Path, parent: Directory = None):
+        if self.registry.config.is_ignored(subpath):
+            logger.debug(f"Skipping '{subpath}' due to path ignore rules")
+            return
+
         if subpath.is_dir():
             logger.debug(f"🔍 Parsing directory '{subpath}'")
             
@@ -46,12 +54,12 @@ class BaseParser(ABC):
                 root = parent
 
             for path in subpath.glob("*"):
+                # Always check ignore rules before recursion or file parsing
                 if self.registry.config.is_ignored(path):
                     logger.debug(f"Skipping '{path}' due to path ignore rules")
                     continue
                 
                 relative_path = self.registry.relative_to_project(path)
-                existing = self.registry.get_struct_by_uid(str(relative_path))
                 
                 if path.is_dir():
                     directory = Directory(path=relative_path, registry=self.registry, parent=root)
@@ -80,7 +88,9 @@ class BaseParser(ABC):
             return None
 
         try:
-            builder = StructBuilderProvider.get_builder(subpath.suffix, self.registry)
+            builder = LanguageProvider.get_builder(self.registry)
+            if not builder.handles_extension(subpath.suffix):
+                return None
         except LanguageNotSupportedError as e:
             logger.warning(str(e))
             return None

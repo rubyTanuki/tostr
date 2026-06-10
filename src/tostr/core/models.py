@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 import asyncio
 
 from loguru import logger
-from tostr.core.providers import StructBuilderProvider
 from tostr.exceptions import LanguageNotSupportedError
 
 from tostr.semantic.llm import CLASS_SYSTEM_INSTRUCTION, FILE_SYSTEM_INSTRUCTION, DIRECTORY_SYSTEM_INSTRUCTION
@@ -17,6 +16,9 @@ from tostr.semantic.llm import CLASS_SYSTEM_INSTRUCTION, FILE_SYSTEM_INSTRUCTION
 
 if TYPE_CHECKING:
     from tostr.core.registry import Registry
+    from tree_sitter import Node
+    from tostr.semantic.llm.base import LLMClient
+    from tostr.semantic.embeddings.base import EmbeddingClient
 
 @dataclass(eq=False)
 class BaseStruct(ABC):
@@ -59,10 +61,15 @@ class BaseStruct(ABC):
 
     # Caches
     _all_children_cache: Optional[List[BaseStruct]] = field(default=None, init=False, repr=False)
-    _methods_cache: Optional[List[BaseMethod]] = field(default=None, init=False, repr=False)
-    _fields_cache: Optional[List[BaseField]] = field(default=None, init=False, repr=False)
-    _classes_cache: Optional[List[BaseClass]] = field(default=None, init=False, repr=False)
-    _directories_cache: Optional[List[Directory]] = field(default=None, init=False, repr=False)
+    _type_caches: Dict[type, List[BaseStruct]] = field(default_factory=dict, init=False, repr=False)
+
+    def get_children_by_type(self, type_cls: type) -> List[BaseStruct]:
+        if type_cls in self._type_caches:
+            return self._type_caches[type_cls]
+        
+        children = [child for child in self.all_children if isinstance(child, type_cls)]
+        self._type_caches[type_cls] = children
+        return children
     
     @property
     def all_children(self):
@@ -75,31 +82,23 @@ class BaseStruct(ABC):
     
     @property
     def directories(self):
-        if self._directories_cache is not None: return self._directories_cache
-        self._directories_cache = [child for child in self.all_children if isinstance(child, Directory)]
-        return self._directories_cache
+        return self.get_children_by_type(Directory)
     
     @property
     def files(self):
-        return list(self.children.get("BaseFile", set()))
+        return self.get_children_by_type(BaseFile)
     
     @property
     def methods(self):
-        if self._methods_cache is not None: return self._methods_cache
-        self._methods_cache = [child for child in self.all_children if isinstance(child, BaseMethod)]
-        return self._methods_cache
+        return self.get_children_by_type(BaseMethod)
     
     @property
     def fields(self):
-        if self._fields_cache is not None: return self._fields_cache
-        self._fields_cache = [child for child in self.all_children if isinstance(child, BaseField)]
-        return self._fields_cache
+        return self.get_children_by_type(BaseField)
     
     @property
     def classes(self):
-        if self._classes_cache is not None: return self._classes_cache
-        self._classes_cache = [child for child in self.all_children if isinstance(child, BaseClass)]
-        return self._classes_cache
+        return self.get_children_by_type(BaseClass)
     
     @property
     def edges(self):
@@ -136,10 +135,7 @@ class BaseStruct(ABC):
 
     def _clear_caches(self):
         self._all_children_cache = None
-        self._methods_cache = None
-        self._fields_cache = None
-        self._classes_cache = None
-        self._directories_cache = None
+        self._type_caches = {}
     
     def set_parent(self, parent: BaseStruct):
         if self is parent:
@@ -157,6 +153,8 @@ class BaseStruct(ABC):
             self.diff_hash = hashlib.md5("".join(child_hashes).encode("utf-8")).hexdigest()
     
     def add_dependency(self, target: BaseStruct):
+        if target in self.outbound_dependencies:
+            return
         self.outbound_dependencies.add(target)
         self.outbound_dependency_names.add(target.uid)
         target.inbound_dependencies.add(self)
@@ -166,6 +164,8 @@ class BaseStruct(ABC):
                 self.parent.add_dependency(target.parent)
                 
     def add_fuzzy_dependency(self, target: BaseStruct):
+        if target in self.outbound_dependencies_fuzzy:
+            return
         self.outbound_dependencies_fuzzy.add(target)
         self.outbound_dependency_names.add('~' + target.uid)
         target.inbound_dependencies_fuzzy.add(self)
@@ -234,7 +234,12 @@ class Directory(BaseStruct):
     
     def __init__(self, path, registry=None, parent=None, uid=None):
         uid = uid or str(path)
-        super().__init__(name=path.name, path=path, uid=uid, registry=registry, parent=parent)
+        name = path.name
+        # Handle the root directory case where path.name is empty for Path('.')
+        if not name and registry and registry.project_path and str(path) == ".":
+            name = registry.project_path.name
+
+        super().__init__(name=name, path=path, uid=uid, registry=registry, parent=parent)
     
     async def resolve_description_async(self, llm: LLMClient = None, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
@@ -296,48 +301,6 @@ class Directory(BaseStruct):
 
         logger.debug(f"Successfully Generated Description for directory {self.uid}")
     
-    def parse_children(self):
-        if self.path is None:
-            logger.error(f"{self} has no path")
-            return
-        
-        # Ensure we use an absolute path for globbing if it's relative
-        full_path = self.path
-        if not full_path.is_absolute() and self.registry:
-            full_path = self.registry.project_path / self.path
-
-        for path in full_path.glob("*"):
-            if self.registry.config.is_ignored(path):
-                logger.debug(f"Skipping \'{path}\' due to path ignore rules")
-                continue
-            else:
-                if path.is_dir():
-                    logger.debug(f"🔍 Parsing directory \'{path}\'")
-                    relative_path = self.registry.relative_to_project(path)
-                    directory = Directory(path=relative_path, registry=self.registry, parent=self)
-                    self.registry.add_struct(directory)
-                    self.add_child(directory)
-                    directory.parse_children()
-                else:
-                    logger.debug(f"Attempting to resolve builder for suffix {path.parts[-1]}")
-                    try:
-                        if self.registry.config.is_ignored(path):
-                            logger.debug(f"Skipping \'{path}\' due to path ignore rules")
-                            continue
-                        builder = StructBuilderProvider.get_builder(path.suffix, self.registry)
-                    except LanguageNotSupportedError as e:
-                        continue
-                    instance = builder.build_file().from_path(path, parent=self)
-                    
-                    # Calculate file hash from children if any exist
-                    instance.calculate_distributed_hash()
-
-                    self.registry.add_struct(instance)
-                    self.add_child(instance)
-        
-        # Calculate directory hash from its direct children
-        self.calculate_distributed_hash()
-    
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "directory"
@@ -357,29 +320,41 @@ class BaseFile(BaseStruct):
     async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
         assert llm is not None, "LLMClient instance is required to resolve descriptions."
         
-        if self.description:
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1)
-                if self.vector is not None:
-                    self.registry.progress_tracker.advance('embed', 1)
-                elif embedder:
-                    embedder.enqueue(self)
-            return
-
+        # 1. Handle Recursion (Non-methods)
         if self.all_children:
             coroutine_list = [
                 child.resolve_description_async(llm, embedder) 
                 for child in self.all_children
+                if not isinstance(child, BaseMethod) # Methods are handled by this file below
             ]
-            await asyncio.gather(*coroutine_list)
+            if coroutine_list:
+                await asyncio.gather(*coroutine_list)
 
+        # 2. If already described, account for ourselves and our methods and exit
+        if self.description:
+            if self.registry and getattr(self.registry, "progress_tracker", None):
+                self.registry.progress_tracker.advance('describe', 1 + len(self.methods))
+                if self.vector is not None:
+                    self.registry.progress_tracker.advance('embed', 1)
+                elif embedder:
+                    embedder.enqueue(self)
+                
+                for m in self.methods:
+                    if m.vector is not None:
+                        self.registry.progress_tracker.advance('embed', 1)
+                    elif embedder:
+                        embedder.enqueue(m)
+            return
+
+        # 3. Handle simple cases
         if len(self.all_children) == 0:
             self.description = "Empty File"
             if self.registry and getattr(self.registry, "progress_tracker", None):
                 self.registry.progress_tracker.advance('describe', 1)
                 self.registry.progress_tracker.advance('embed', 1)
             return
-        if len(self.all_children) == 1:
+        
+        if len(self.all_children) == 1 and not isinstance(self.all_children[0], BaseMethod):
             self.description = self.all_children[0].description
             self.vector = self.all_children[0].vector
             if self.registry and getattr(self.registry, "progress_tracker", None):
@@ -387,14 +362,29 @@ class BaseFile(BaseStruct):
                 self.registry.progress_tracker.advance('embed', 1)
             return
         
+        # 4. Process this file and its methods
         logger.debug(f"Generating Description for file {self.uid}...")
 
+        method_lookup = {idx: m for idx, m in enumerate(self.methods) if not m.description}
+        
+        # Account for methods that already have descriptions
+        already_described = [m for m in self.methods if m.description]
+        if self.registry and getattr(self.registry, "progress_tracker", None) and already_described:
+            self.registry.progress_tracker.advance('describe', len(already_described))
+            for m in already_described:
+                if m.vector is not None:
+                    self.registry.progress_tracker.advance('embed', 1)
+                elif embedder:
+                    embedder.enqueue(m)
+
         input_data = {
-            c.uid: c.description for c in self.all_children
+            "described_components": {c.uid: c.description for c in self.all_children if c.description},
+            "un_described_methods": {str(idx): m.body for idx, m in method_lookup.items()}
         }
 
         class FileDescriptionSchema(BaseModel):
             description: str = Field(description="Description of the file")
+            description_map: dict[str, str] = Field(default_factory=dict, description="Mapping of method_id to description")
 
         response = await llm.generate_description(
             input_data=input_data,
@@ -405,13 +395,36 @@ class BaseFile(BaseStruct):
         if not response:
             logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
             if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('embed', 1)
+                self.registry.progress_tracker.advance('describe', 1 + len(method_lookup))
+                self.registry.progress_tracker.advance('embed', 1 + len(method_lookup))
             return
 
         self.description = response.description
 
         if embedder is not None:
             embedder.enqueue(self)
+
+        handled_indices = set()
+        for idx_str, desc in response.description_map.items():
+            try:
+                idx = int(idx_str)
+            except (ValueError, TypeError):
+                continue
+            if idx in method_lookup:
+                method = method_lookup[idx]
+                method.description = desc
+                handled_indices.add(idx)
+                if embedder is not None:
+                    embedder.enqueue(method)
+
+        if handled_indices and self.registry and getattr(self.registry, "progress_tracker", None):
+            self.registry.progress_tracker.advance('describe', len(handled_indices))
+
+        # Handle any methods that were sent but not described by the LLM
+        missed_count = len(method_lookup) - len(handled_indices)
+        if missed_count > 0 and self.registry and getattr(self.registry, "progress_tracker", None):
+            self.registry.progress_tracker.advance('describe', missed_count)
+            self.registry.progress_tracker.advance('embed', missed_count)
 
         logger.debug(f"Successfully Generated Description for file {self.uid}")
 
@@ -448,12 +461,10 @@ class BaseClass(BaseCodeStruct):
     enum_constants: Optional[List[str]] = None
     inherits: List[str] = field(default_factory=list) # list of parent class UIDs for inheritance relationships
     
-    _type_cache: Dict[str, Optional[BaseStruct]] = field(default_factory=dict, init=False, repr=False)
     _potential_parents_cache: Optional[List[str]] = field(default=None, init=False, repr=False)
 
     def _clear_caches(self):
         super()._clear_caches()
-        self._type_cache = {}
         self._potential_parents_cache = None
 
     @property
@@ -470,41 +481,10 @@ class BaseClass(BaseCodeStruct):
     def imports(self) -> List[str]:
         return self.parent.imports
     
-    def resolve_type(self, type_name: str) -> Optional[BaseStruct]:
-        """Resolves a simple or scoped type name to a struct using package and imports."""
-        if not type_name: return None
-        if type_name in self._type_cache:
-            return self._type_cache[type_name]
-
-        # 1. Exact match (already a UID)
-        dep = self.registry.get_struct_by_uid(type_name)
-        
-        # 2. Same package
-        if not dep:
-            package = getattr(self.parent, "package", None) if isinstance(self.parent, BaseFile) else None
-            if package:
-                dep = self.registry.get_struct_by_uid(f"{package}.{type_name}")
-        
-        # 3. Specific imports
-        if not dep:
-            for imp in self.imports:
-                if imp.endswith(f".{type_name}"):
-                    dep = self.registry.get_struct_by_uid(imp)
-                    if dep: break
-        
-        # 4. Wildcard imports
-        if not dep:
-            for imp in self.imports:
-                if imp.endswith(".*"):
-                    package_name = imp[:-2]
-                    dep = self.registry.get_struct_by_uid(f"{package_name}.{type_name}")
-                    if dep: break
-        
-        self._type_cache[type_name] = dep
-        return dep
-
     def resolve_dependencies(self):
         # logger.debug(f"Resolving dependencies for {self}")
+        resolver = self.registry.get_resolver()
+
         # resolve child dependencies
         super().resolve_dependencies()
         
@@ -518,13 +498,13 @@ class BaseClass(BaseCodeStruct):
         # resolve inheritance dependencies
         if self.inherits:
             for parent_class in self.inherits:
-                dep = self.resolve_type(parent_class)
+                dep = resolver.resolve_type(self, parent_class)
                 if dep:
                     self.add_dependency(dep)
         
         # resolve field types
         for field in self.fields:
-            dep = self.resolve_type(field.field_type)
+            dep = resolver.resolve_type(self, field.field_type)
             if dep:
                 self.add_dependency(dep)
         
@@ -688,87 +668,8 @@ class BaseMethod(BaseCodeStruct):
     
     def resolve_dependencies(self):
         logger.debug(f"Resolving dependencies for method {self.uid}")
-        for dep_info in self.dependency_names:
-            # Handle both old (name, arity) and new (name, arity, receiver, is_creation) formats
-            if len(dep_info) == 2:
-                name, arity = dep_info
-                receiver, is_creation = None, False
-            else:
-                name, arity, receiver, is_creation = dep_info
-
-            if is_creation:
-                if isinstance(self.parent, BaseClass):
-                    dep = self.parent.resolve_type(name)
-                    if dep: self.add_dependency(dep)
-                continue
-
-            # --- METHOD RESOLUTION ---
-            resolved = False
-            # 1. LOCAL
-            search_scope = self.parent.children if self.parent else self.children
-            for child_set in list(search_scope.values()):
-                for child in list(child_set):
-                    if child.name == name and getattr(child, "arity", -1) == arity:
-                        self.add_dependency(child)
-                        resolved = True
-                        break
-                if resolved: break
-            if resolved: continue
-
-            # 2. RECEIVER-BASED HEURISTIC
-            if receiver and isinstance(self.parent, BaseClass):
-                # Check fields for receiver type
-                receiver_type = None
-                for field in self.parent.fields:
-                    if field.name == receiver:
-                        receiver_type = field.field_type
-                        break
-                
-                if receiver_type:
-                    dep_type = self.parent.resolve_type(receiver_type)
-                    if dep_type:
-                        candidates = self.registry.resolve_methods(name=name, arity=arity, parent_name=dep_type.uid)
-                        if candidates:
-                            self.add_dependency(candidates[0])
-                            continue
-            
-            # 3. IMPORTED & INHERITED (including wildcards)
-            if isinstance(self.parent, BaseClass):
-                if self.parent._potential_parents_cache is None:
-                    potential_parents = []
-                    # Same package
-                    package = getattr(self.parent.parent, "package", None) if isinstance(self.parent.parent, BaseFile) else None
-                    if package: potential_parents.append(f"{package}.*")
-                    
-                    # All imports
-                    potential_parents.extend(self.parent.imports)
-                    
-                    # All inheritance
-                    potential_parents.extend(self.parent.inherits)
-                    self.parent._potential_parents_cache = potential_parents
-                
-                potential_parents = self.parent._potential_parents_cache
-                all_candidates = []
-                for p_name in potential_parents:
-                    candidates = self.registry.resolve_methods(name=name, arity=arity, parent_name=p_name)
-                    all_candidates.extend(candidates)
-                
-                if len(all_candidates) == 1:
-                    # logger.debug(f"Resolved {name} to {all_candidates[0].uid}")
-                    self.add_dependency(all_candidates[0])
-                elif len(all_candidates) > 1:
-                    # Apply heuristic: if receiver matches part of class name
-                    refined_candidates = []
-                    if receiver:
-                        for c in all_candidates:
-                            if receiver.lower() in c.parent.name.lower():
-                                refined_candidates.append(c)
-                    
-                    if len(refined_candidates) == 1:
-                        self.add_dependency(refined_candidates[0])
-                    else:
-                        for c in all_candidates:
-                            self.add_fuzzy_dependency(c)
+        resolver = self.registry.get_resolver()
+        resolver.resolve_method_dependencies(self)
         
         if self.registry and self.registry.progress_tracker:
             self.registry.progress_tracker.advance('resolve', 1)

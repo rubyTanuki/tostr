@@ -18,12 +18,19 @@ Reference methods by their provided integer `method_id`.
 FILE_SYSTEM_INSTRUCTION = """
 You are an expert software architect and technical writer.
 Your goal is to generate a high-quality, information-dense summary of a source code file.
-You are provided with a JSON mapping of component UIDs (classes, methods, fields) to their respective descriptions.
+You are provided with a JSON mapping of component UIDs (classes, methods, fields) to their respective descriptions, as well as raw code for un-described file-level methods.
 
 ### TASK
-Analyze the provided component descriptions and generate a concise, professional summary of the file's overall purpose, its main components, and how they interact. 
+Analyze the provided component descriptions and file-level methods to generate a JSON response. 
+
+**File Analysis**: Generate a `description` for the overall file. Provide a concise, professional summary of the file's overall purpose, its main components, and how they interact. 
 The description should be optimized for an AI Agent's contextual reference, focusing on high signal-to-noise ratio and semantic depth.
 Avoid introductory phrases like "This file contains..." and get straight to the technical essence.
+
+**Method Analysis**: For each un-described file-level method provided in `un_described_methods`, generate a `description` summary of what the method does. 
+   - **Focus on**: Inputs and Outputs (semantics) and Side Effects (state changes). If the method is complex, include core logic (algorithms and data flow).
+   - **Style**: Technical, precise, and dense. Start with an active verb (e.g., "Calculates...", "Updates..."). Unless complexity is high, try to keep it to one sentence.
+Reference methods by their provided integer `method_id`.
 """
 
 DIRECTORY_SYSTEM_INSTRUCTION = """

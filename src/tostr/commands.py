@@ -106,11 +106,21 @@ def _write_default_ignore(target_path: Path, ignore_type: str):
     else:
         logger.warning(f"No default ignore template found for {ignore_type} at {template_path}")
 
-async def init_async(target_path: Path, use_cache: bool = True, ignore: str = None, progress_tracker: "ProgressTracker" = None):
+async def init_async(target_path: Path, use_cache: bool = True, language: str = "java", progress_tracker: "ProgressTracker" = None):
     """Core asynchronous logic for scraping and parsing."""
     
-    if ignore:
-        _write_default_ignore(target_path, ignore)
+    # Ensure .tostr directory exists
+    tostr_dir = target_path / ".tostr"
+    tostr_dir.mkdir(exist_ok=True)
+
+    # Save language to config.toml
+    config_path = tostr_dir / "config.toml"
+    config_content = f"[project]\nlanguage = \"{language}\"\n"
+    with open(config_path, 'w') as f:
+        f.write(config_content)
+
+    # Write default ignore for the language
+    _write_default_ignore(target_path, language)
 
     # Parse and resolve AST
     parser = await _build_ast_async(target_path, use_cache=use_cache, progress_tracker=progress_tracker)

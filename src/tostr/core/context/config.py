@@ -36,6 +36,10 @@ class ProjectConfig:
         self.toml_config = self._init_toml_config(project_path)
         self.ignore_rules = self._init_path_ignore(project_path)
         self.hardcoded_rules = pathspec.PathSpec.from_lines('gitignore', self.HARDCODED_IGNORES)
+
+    @property
+    def language(self) -> str:
+        return self.toml_config.get("project", {}).get("language", "java")
     
     def _init_toml_config(self, project_path: Path) -> Dict:
         toml_path = project_path / ".tostr" / "config.toml"
@@ -55,12 +59,24 @@ class ProjectConfig:
         return pathspec.PathSpec.from_lines('gitignore', [])
 
     def is_ignored(self, file_path: Path) -> bool:
+        if not self.project_path:
+            return False
+
         # 1. Convert to a POSIX string relative to the project root
         try:
-            relative_path = file_path.resolve().relative_to(self.project_path.resolve()).as_posix()
+            # We prefer absolute() over resolve() to avoid following symlinks 
+            # that point outside the project tree during logical traversal.
+            relative_path = file_path.absolute().relative_to(self.project_path.absolute()).as_posix()
         except ValueError:
-            # If the file is outside the project root, we should probably ignore it
-            return True
+            # Fallback to resolve() if they are in different places but logically linked
+            try:
+                relative_path = file_path.resolve().relative_to(self.project_path.resolve()).as_posix()
+            except ValueError:
+                # If the file is outside the project root, we should probably ignore it
+                return True
+
+        if relative_path == ".":
+            return False
 
         # If it's a directory, append a slash so directory-only rules (like `dist/`) can match it
         if file_path.is_dir() and not relative_path.endswith('/'):
