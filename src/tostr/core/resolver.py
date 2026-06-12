@@ -50,10 +50,13 @@ class BaseDependencyResolver:
         
         return None
 
+    def _use_local_search(self, dep_info: tuple) -> bool:
+        return True
+
     def resolve_method_dependencies(self, method: BaseMethod):
         """Resolves dependencies for a given method/function."""
         # logger.debug(f"Resolving dependencies for method {method.uid}")
-        
+
         for dep_info in method.dependency_names:
             if len(dep_info) == 2:
                 name, arity = dep_info
@@ -68,17 +71,18 @@ class BaseDependencyResolver:
 
             # --- METHOD RESOLUTION ---
             resolved = False
-            
+
             # 1. LOCAL SEARCH (Same container)
-            search_scope = method.parent.children if method.parent else method.children
-            for child_set in list(search_scope.values()):
-                for child in list(child_set):
-                    if child.name == name and (not self.strict_arity or getattr(child, "arity", -1) == arity):
-                        method.add_dependency(child)
-                        resolved = True
-                        break
-                if resolved: break
-            if resolved: continue
+            if self._use_local_search((name, arity, receiver, is_creation)):
+                search_scope = method.parent.children if method.parent else method.children
+                for child_set in list(search_scope.values()):
+                    for child in list(child_set):
+                        if child.name == name and (not self.strict_arity or getattr(child, "arity", -1) == arity):
+                            method.add_dependency(child)
+                            resolved = True
+                            break
+                    if resolved: break
+                if resolved: continue
 
             # 2. RECEIVER-BASED HEURISTIC
             if receiver:
@@ -195,7 +199,53 @@ class JavaDependencyResolver(BaseDependencyResolver):
     pass
 
 class PythonDependencyResolver(BaseDependencyResolver):
-    """Specific tweaks for Python if necessary."""
     def __init__(self, registry: Registry):
         super().__init__(registry)
         self.strict_arity = False
+
+    def _use_local_search(self, dep_info: tuple) -> bool:
+        name, arity, receiver, is_creation = dep_info
+        if receiver is None:
+            return True
+        bare = receiver.split('.')[0]
+        return bare in ('self', 'cls')
+
+    def _resolve_receiver_type(self, method: "BaseMethod", receiver: str) -> Optional[str]:
+        from tostr.core.models import BaseClass
+
+        # self/cls always refer to the enclosing class.
+        if receiver in ('self', 'cls'):
+            if isinstance(method.parent, BaseClass):
+                return method.parent.uid
+            return None
+
+        # self.field or cls.field — look up the first-level field type in the parent class.
+        if receiver.startswith(('self.', 'cls.')):
+            field_name = receiver.split('.', 1)[1].split('.')[0]
+            if isinstance(method.parent, BaseClass):
+                for f in method.parent.fields:
+                    if f.name == field_name and f.field_type:
+                        return f.field_type
+            return None
+
+        return super()._resolve_receiver_type(method, receiver)
+
+    def _get_potential_lookup_parents(self, method: "BaseMethod") -> List[str]:
+        parents = super()._get_potential_lookup_parents(method)
+
+        # For named imports like "utils.format_currency", the base class adds the full
+        # dotted path as a parent. But free Python functions have UIDs like
+        # "utils.format_currency(amount)" — the module UID is just "utils". Add the
+        # module scope so resolve_methods can find free functions in that file.
+        parent_struct = method.parent
+        imports = getattr(parent_struct, "imports", [])
+        if not imports and parent_struct and parent_struct.parent:
+            imports = getattr(parent_struct.parent, "imports", [])
+
+        extra = []
+        for imp in imports:
+            if not imp.endswith(".*") and "." in imp:
+                module_scope = imp.rsplit(".", 1)[0]
+                if module_scope not in parents:
+                    extra.append(module_scope)
+        return parents + extra

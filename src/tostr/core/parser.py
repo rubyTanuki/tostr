@@ -16,7 +16,7 @@ class BaseParser(ABC):
         self.llm = llm
         self.embedder = embedder
         self.registry = registry
-        self.langs_with_dependency_support = {"java"}
+        self.langs_with_dependency_support = {"java", "python"}
     
     @property
     def files(self):

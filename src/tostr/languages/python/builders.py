@@ -26,49 +26,65 @@ class PythonBuilder(BaseBuilder):
 class PythonFileBuilder(BaseFileBuilder):
     def from_path(self, path: Path, parent: BaseStruct=None) -> BaseFile:
         file_obj = super().from_path(path)
-    
-        imports = []
+
         body_bytes = b""
-        
         with open(path, "rb") as f:
             body_bytes = f.read()
         file_obj.body = body_bytes.decode("utf-8")
         file_obj.diff_hash = hashlib.md5(body_bytes).hexdigest()
-        
+
         parser = Parser(PYTHON_LANGUAGE)
         tree = parser.parse(body_bytes)
         file_obj.node = tree.root_node
-        
+
         # In Python, the package/module name is determined by the directory structure.
         rel_path = self.registry.relative_to_project(path)
         module_path = ".".join(rel_path.with_suffix("").parts).replace("/", ".").replace("\\", ".")
         file_obj.uid = module_path
         file_obj.package = module_path
-        
-        self._parse_children(file_obj.node, file_obj)
-        
-        # Parse imports
+
+        # Phase 1: Parse imports first to build alias_map before children are parsed.
+        # alias_map: {alias_name -> original_uid} used to normalize call-site names.
+        imports = []
+        alias_map = {}
         for child in file_obj.node.children:
             if child.type == "import_statement":
-                # import x, y as z
-                for dotted_name in child.children_by_field_name("name"):
-                    imports.append(dotted_name.text.decode('utf-8'))
+                for name_child in child.children_by_field_name("name"):
+                    if name_child.type == "aliased_import":
+                        original_node = name_child.child_by_field_name("name")
+                        alias_node = name_child.child_by_field_name("alias")
+                        if original_node:
+                            original = original_node.text.decode('utf-8')
+                            imports.append(original)
+                            if alias_node:
+                                alias_map[alias_node.text.decode('utf-8')] = original
+                    else:
+                        imports.append(name_child.text.decode('utf-8'))
+
             elif child.type == "import_from_statement":
-                # from x import y, z
                 module_name = ""
                 module_node = child.child_by_field_name("module_name")
                 relative_import_node = child.child_by_field_name("relative_import")
 
                 if module_node:
-                    module_name = module_node.text.decode('utf-8')
+                    raw = module_node.text.decode('utf-8')
+                    if raw.startswith('.'):
+                        # Relative import: ".models" or "..base" — resolve against current package.
+                        stripped = raw.lstrip('.')
+                        num_dots = len(raw) - len(stripped)
+                        if file_obj.package:
+                            parts = file_obj.package.split('.')
+                            base_parts = parts[:-num_dots] if num_dots <= len(parts) else []
+                            module_name = ".".join(base_parts + ([stripped] if stripped else []))
+                        else:
+                            module_name = stripped
+                    else:
+                        module_name = raw
                 elif relative_import_node:
                     prefix_node = relative_import_node.child_by_field_name("prefix")
                     dotted_name_node = relative_import_node.child_by_field_name("name")
-                    
                     dots = prefix_node.text.decode('utf-8') if prefix_node else ""
                     dotted_part = dotted_name_node.text.decode('utf-8') if dotted_name_node else ""
-                    
-                    # Resolve relative path
                     num_dots = dots.count('.')
                     if num_dots > 0 and file_obj.package:
                         parts = file_obj.package.split('.')
@@ -78,7 +94,6 @@ class PythonFileBuilder(BaseFileBuilder):
                         module_name = dotted_part
 
                 if module_name:
-                    # Look for imported names
                     has_wildcard = any(gc.type == "wildcard_import" for gc in child.children)
                     if has_wildcard:
                         imports.append(f"{module_name}.*")
@@ -87,13 +102,43 @@ class PythonFileBuilder(BaseFileBuilder):
                             if gc.type in {"aliased_import", "dotted_name", "identifier"}:
                                 if gc == module_node or gc == relative_import_node:
                                     continue
-                                
-                                name_node = gc.child_by_field_name("name") or gc
-                                imp_name = name_node.text.decode('utf-8')
-                                imports.append(f"{module_name}.{imp_name}")
-        
+                                if gc.type == "aliased_import":
+                                    name_node = gc.child_by_field_name("name") or gc
+                                    alias_node = gc.child_by_field_name("alias")
+                                    imp_name = name_node.text.decode('utf-8')
+                                    original_uid = f"{module_name}.{imp_name}"
+                                    imports.append(original_uid)
+                                    if alias_node:
+                                        alias_map[alias_node.text.decode('utf-8')] = original_uid
+                                else:
+                                    imports.append(f"{module_name}.{gc.text.decode('utf-8')}")
+
         file_obj.imports = list(set(imports))
+
+        # Phase 2: Parse children (methods capture raw call-site names/receivers).
+        self._parse_children(file_obj.node, file_obj)
+
+        # Phase 3: Normalize aliases in all descendant method dependency_names.
+        if alias_map:
+            self._normalize_deps(file_obj, alias_map)
+
         return file_obj
+
+    def _normalize_deps(self, struct: "BaseStruct", alias_map: dict):
+        """Post-process all method dependency_names, replacing alias names with original UIDs."""
+        for child_set in struct.children.values():
+            for child in child_set:
+                if isinstance(child, BaseMethod) and child.dependency_names:
+                    child.dependency_names = [
+                        (
+                            alias_map.get(name, name),
+                            arity,
+                            alias_map.get(receiver, receiver) if receiver else receiver,
+                            is_creation,
+                        )
+                        for name, arity, receiver, is_creation in child.dependency_names
+                    ]
+                self._normalize_deps(child, alias_map)
 
     def _parse_children(self, node: Node, parent: BaseStruct):
         class_builder = PythonClassBuilder(self.registry)
@@ -204,7 +249,10 @@ class PythonMethodBuilder(BaseMethodBuilder):
                     param_text = param_text[:47] + "..."
                 parameters.append(param_text)
             
-        arity = len(parameters)
+        # Exclude self/cls from arity — callers never pass them.
+        first_bare = parameters[0].split('=')[0].split(':')[0].strip() if parameters else ""
+        arity_params = parameters[1:] if first_bare in ('self', 'cls') else parameters
+        arity = len(arity_params)
         parameters_string = f"({', '.join(parameters)})"
         
         # SIGNATURE
@@ -293,5 +341,5 @@ class PythonFieldBuilder(BaseFieldBuilder):
             start_line=node.start_point[0],
             end_line=node.end_point[0],
             node=node,
-            field_type="", # Python is dynamic, type hinting could be parsed if needed
+            field_type=field_type,
         )

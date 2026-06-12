@@ -153,6 +153,8 @@ class BaseStruct(ABC):
             self.diff_hash = hashlib.md5("".join(child_hashes).encode("utf-8")).hexdigest()
     
     def add_dependency(self, target: BaseStruct):
+        if target is self:
+            return
         if target in self.outbound_dependencies:
             return
         self.outbound_dependencies.add(target)
@@ -164,6 +166,8 @@ class BaseStruct(ABC):
                 self.parent.add_dependency(target.parent)
                 
     def add_fuzzy_dependency(self, target: BaseStruct):
+        if target is self:
+            return
         if target in self.outbound_dependencies_fuzzy:
             return
         self.outbound_dependencies_fuzzy.add(target)
