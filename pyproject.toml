@@ -39,9 +39,6 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.setuptools_scm]
 
-[tool.setuptools.package-data]
-tostr = ["resources/models/all-MiniLM-L6-v2/*"]
-
 [project.optional-dependencies]
 test = [
     "pytest>=7.0",
