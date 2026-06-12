@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import MagicMock
 from tostr.semantic.llm.base import LLMClient, LLMStrategy, LLMResponse
 from tostr.core.models import BaseClass, BaseMethod, BaseFile
+from tostr.core.describer import LLMDescriber
 from tostr.core.registry import Registry
 from pydantic import BaseModel, Field
 from typing import Type
@@ -36,30 +37,29 @@ async def test_llm_client_generate_description():
 @pytest.mark.asyncio
 async def test_models_resolve_description_data_flow():
     """
-    Test the full data flow from BaseClass.resolve_description_async through LLMClient.
+    Test the full data flow from LLMDescriber through LLMClient into BaseClass/BaseMethod.
     """
     registry = MagicMock(spec=Registry)
+    registry.progress_tracker = None
     parent_file = MagicMock(spec=BaseFile, imports=[], package="com.example")
-    
-    # Create a real BaseClass instance
+
     cls = BaseClass(name="TestClass", uid="TestClass")
     cls.registry = registry
     cls.parent = parent_file
-    
-    # Create a real BaseMethod instance
+
     method = BaseMethod(name="testMethod", uid="TestClass#testMethod")
+    method.registry = registry
     cls.add_child(method)
-    
-    # Mock skeletonize because it normally requires a tree-sitter node reference
+
     cls.skeletonize = MagicMock(return_value="class skeleton")
-    
+
     strategy = MockStrategy(api_key="test", model_name="test")
     client = LLMClient(strategy)
-    
-    # This should trigger the LLM call and update descriptions
-    await cls.resolve_description_async(client)
-    
-    # Verify descriptions were updated
+    embedder = MagicMock()
+
+    describer = LLMDescriber(llm=client, embedder=embedder)
+    await describer.describe(cls)
+
     assert cls.description == "Mock class description"
     assert method.description == "Mock method description"
 

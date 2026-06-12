@@ -1,24 +1,17 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Set, List, Dict, Optional, TYPE_CHECKING, ClassVar
 import json
 import hashlib
 from pathlib import Path
-from pydantic import BaseModel, Field
-import asyncio
 
 from loguru import logger
 from tostr.exceptions import LanguageNotSupportedError
 
-from tostr.semantic.llm import CLASS_SYSTEM_INSTRUCTION, FILE_SYSTEM_INSTRUCTION, DIRECTORY_SYSTEM_INSTRUCTION
-
-
 if TYPE_CHECKING:
     from tostr.core.registry import Registry
     from tree_sitter import Node
-    from tostr.semantic.llm.base import LLMClient
-    from tostr.semantic.embeddings.base import EmbeddingClient
 
 @dataclass(eq=False)
 class BaseStruct(ABC):
@@ -187,10 +180,6 @@ class BaseStruct(ABC):
         if self.registry and self.registry.progress_tracker:
             self.registry.progress_tracker.advance('resolve', 1)
 
-    @abstractmethod
-    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
-        pass
-    
     @classmethod
     def from_dict(cls, d: dict):
         data = d.copy()
@@ -245,66 +234,6 @@ class Directory(BaseStruct):
 
         super().__init__(name=name, path=path, uid=uid, registry=registry, parent=parent)
     
-    async def resolve_description_async(self, llm: LLMClient = None, embedder: EmbeddingClient = None):
-        assert llm is not None, "LLMClient instance is required to resolve descriptions."
-        
-        if self.description:
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1)
-                if self.vector is not None:
-                    self.registry.progress_tracker.advance('embed', 1)
-                elif embedder:
-                    embedder.enqueue(self)
-            return
-
-        if self.all_children:
-            coroutine_list = [
-                child.resolve_description_async(llm, embedder) 
-                for child in self.all_children
-            ]
-            await asyncio.gather(*coroutine_list)
-
-        if len(self.all_children) == 0:
-            self.description = "Empty Directory"
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1)
-                self.registry.progress_tracker.advance('embed', 1)
-            return
-        if len(self.all_children) == 1:
-            self.description = self.all_children[0].description
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1)
-                self.registry.progress_tracker.advance('embed', 1)
-            return
-        
-        logger.debug(f"Generating Description for directory {self.uid}...")
-
-        input_data = {
-            c.uid: c.description for c in self.all_children
-        }
-
-        class DirectoryDescriptionSchema(BaseModel):
-            description: str = Field(description="Description of the directory")
-
-        response = await llm.generate_description(
-            input_data=input_data,
-            system_prompt=DIRECTORY_SYSTEM_INSTRUCTION,
-            response_schema=DirectoryDescriptionSchema
-        )
-
-        if not response:
-            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('embed', 1)
-            return
-
-        self.description = response.description
-
-        if embedder is not None:
-            embedder.enqueue(self)
-
-        logger.debug(f"Successfully Generated Description for directory {self.uid}")
-    
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "directory"
@@ -321,118 +250,6 @@ class BaseFile(BaseStruct):
     diff_hash: str = ""
     node: "Node" = None
     
-    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
-        assert llm is not None, "LLMClient instance is required to resolve descriptions."
-        
-        # 1. Handle Recursion (Non-methods)
-        if self.all_children:
-            coroutine_list = [
-                child.resolve_description_async(llm, embedder) 
-                for child in self.all_children
-                if not isinstance(child, BaseMethod) # Methods are handled by this file below
-            ]
-            if coroutine_list:
-                await asyncio.gather(*coroutine_list)
-
-        # 2. If already described, account for ourselves and our methods and exit
-        if self.description:
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1 + len(self.methods))
-                if self.vector is not None:
-                    self.registry.progress_tracker.advance('embed', 1)
-                elif embedder:
-                    embedder.enqueue(self)
-                
-                for m in self.methods:
-                    if m.vector is not None:
-                        self.registry.progress_tracker.advance('embed', 1)
-                    elif embedder:
-                        embedder.enqueue(m)
-            return
-
-        # 3. Handle simple cases
-        if len(self.all_children) == 0:
-            self.description = "Empty File"
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1)
-                self.registry.progress_tracker.advance('embed', 1)
-            return
-        
-        if len(self.all_children) == 1 and not isinstance(self.all_children[0], BaseMethod):
-            self.description = self.all_children[0].description
-            self.vector = self.all_children[0].vector
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1)
-                self.registry.progress_tracker.advance('embed', 1)
-            return
-        
-        # 4. Process this file and its methods
-        logger.debug(f"Generating Description for file {self.uid}...")
-
-        method_lookup = {idx: m for idx, m in enumerate(self.methods) if not m.description}
-        
-        # Account for methods that already have descriptions
-        already_described = [m for m in self.methods if m.description]
-        if self.registry and getattr(self.registry, "progress_tracker", None) and already_described:
-            self.registry.progress_tracker.advance('describe', len(already_described))
-            for m in already_described:
-                if m.vector is not None:
-                    self.registry.progress_tracker.advance('embed', 1)
-                elif embedder:
-                    embedder.enqueue(m)
-
-        input_data = {
-            "described_components": {c.uid: c.description for c in self.all_children if c.description},
-            "un_described_methods": {str(idx): m.body for idx, m in method_lookup.items()}
-        }
-
-        class FileDescriptionSchema(BaseModel):
-            description: str = Field(description="Description of the file")
-            description_map: dict[str, str] = Field(default_factory=dict, description="Mapping of method_id to description")
-
-        response = await llm.generate_description(
-            input_data=input_data,
-            system_prompt=FILE_SYSTEM_INSTRUCTION,
-            response_schema=FileDescriptionSchema
-        )
-
-        if not response:
-            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1 + len(method_lookup))
-                self.registry.progress_tracker.advance('embed', 1 + len(method_lookup))
-            return
-
-        self.description = response.description
-
-        if embedder is not None:
-            embedder.enqueue(self)
-
-        handled_indices = set()
-        for idx_str, desc in response.description_map.items():
-            try:
-                idx = int(idx_str)
-            except (ValueError, TypeError):
-                continue
-            if idx in method_lookup:
-                method = method_lookup[idx]
-                method.description = desc
-                handled_indices.add(idx)
-                if embedder is not None:
-                    embedder.enqueue(method)
-
-        if handled_indices and self.registry and getattr(self.registry, "progress_tracker", None):
-            self.registry.progress_tracker.advance('describe', len(handled_indices))
-
-        # Handle any methods that were sent but not described by the LLM
-        missed_count = len(method_lookup) - len(handled_indices)
-        if missed_count > 0 and self.registry and getattr(self.registry, "progress_tracker", None):
-            self.registry.progress_tracker.advance('describe', missed_count)
-            self.registry.progress_tracker.advance('embed', missed_count)
-
-        logger.debug(f"Successfully Generated Description for file {self.uid}")
-
-
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "file"
@@ -544,101 +361,6 @@ class BaseClass(BaseCodeStruct):
             
         return result_bytes.decode('utf-8')
     
-    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
-        assert llm is not None, "LLMClient instance is required to resolve descriptions."
-        
-        # 1. Handle Children Recursion (e.g., nested classes)
-        if self.all_children:
-            coroutine_list = [
-                child.resolve_description_async(llm, embedder) 
-                for child in self.all_children
-                if not isinstance(child, BaseMethod) # Methods are handled by this class below
-            ]
-            if coroutine_list:
-                await asyncio.gather(*coroutine_list)
-
-        # 2. If already described, account for ourselves and our methods and exit
-        if self.description:
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1 + len(self.methods))
-                if self.vector is not None:
-                    self.registry.progress_tracker.advance('embed', 1)
-                elif embedder:
-                    embedder.enqueue(self)
-                
-                for m in self.methods:
-                    if m.vector is not None:
-                        self.registry.progress_tracker.advance('embed', 1)
-                    elif embedder:
-                        embedder.enqueue(m)
-            return
-
-        # 3. Process this class and its methods
-        logger.debug(f"Generating Description for class {self.uid}...")
-
-        method_lookup = {idx: m for idx, m in enumerate(self.methods) if not m.description}
-        
-        # Account for methods that already have descriptions
-        already_described = [m for m in self.methods if m.description]
-        if self.registry and getattr(self.registry, "progress_tracker", None) and already_described:
-            self.registry.progress_tracker.advance('describe', len(already_described))
-            for m in already_described:
-                if m.vector is not None:
-                    self.registry.progress_tracker.advance('embed', 1)
-                elif embedder:
-                    embedder.enqueue(m)
-
-        input_data = {
-            "code": self.skeletonize(),
-            "method_ids_to_signatures": {str(idx): m.signature for idx, m in method_lookup.items()}
-        }
-
-        class ClassDescriptionSchema(BaseModel):
-            description: str = Field(description="Description of the class")
-            description_map: dict[str, str] = Field(default_factory=dict, description="Mapping of method_id to method")
-
-        response = await llm.generate_description(
-            input_data=input_data,
-            system_prompt=CLASS_SYSTEM_INSTRUCTION,
-            response_schema=ClassDescriptionSchema
-        )
-
-        if not response:
-            logger.warning(f"⚠️ Skipping {self.uid} due to LLM failure")
-            if self.registry and getattr(self.registry, "progress_tracker", None):
-                self.registry.progress_tracker.advance('describe', 1 + len(method_lookup))
-                self.registry.progress_tracker.advance('embed', 1 + len(method_lookup))
-            return
-
-        self.description = response.description
-
-        if embedder is not None:
-            embedder.enqueue(self)
-
-        handled_indices = set()
-        for idx_str, desc in response.description_map.items():
-            try:
-                idx = int(idx_str)
-            except (ValueError, TypeError):
-                continue
-            if idx in method_lookup:
-                method = method_lookup[idx]
-                method.description = desc
-                handled_indices.add(idx)
-                if embedder is not None:
-                    embedder.enqueue(method)
-
-        if handled_indices and self.registry and getattr(self.registry, "progress_tracker", None):
-            self.registry.progress_tracker.advance('describe', len(handled_indices))
-
-        # Handle any methods that were sent but not described by the LLM
-        missed_count = len(method_lookup) - len(handled_indices)
-        if missed_count > 0 and self.registry and getattr(self.registry, "progress_tracker", None):
-            self.registry.progress_tracker.advance('describe', missed_count)
-            self.registry.progress_tracker.advance('embed', missed_count)
-
-        logger.debug(f"Successfully Generated Description for class {self.uid}")
-            
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "class"
@@ -661,15 +383,6 @@ class BaseMethod(BaseCodeStruct):
     # def _parse_dependencies(self):
     #     pass
 
-    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
-        # Methods are usually handled by their parent class, but we handle direct calls for robustness.
-        if self.registry and getattr(self.registry, "progress_tracker", None):
-            self.registry.progress_tracker.advance('describe', 1)
-            if self.vector is not None:
-                self.registry.progress_tracker.advance('embed', 1)
-            elif embedder:
-                embedder.enqueue(self)
-    
     def resolve_dependencies(self):
         logger.debug(f"Resolving dependencies for method {self.uid}")
         resolver = self.registry.get_resolver()
@@ -696,9 +409,6 @@ class BaseField(BaseCodeStruct):
     # def _parse_dependencies(self):
     #     pass
 
-    async def resolve_description_async(self, llm: LLMClient, embedder: EmbeddingClient = None):
-        pass
-    
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "field"
