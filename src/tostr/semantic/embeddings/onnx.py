@@ -1,4 +1,5 @@
 from __future__ import annotations
+import shutil
 import urllib.request
 from pathlib import Path
 from loguru import logger
@@ -11,6 +12,12 @@ _ASSETS = {
     "model.onnx": f"{_HF_BASE}/onnx/model.onnx",
     "tokenizer.json": f"{_HF_BASE}/tokenizer.json",
 }
+# Minimum acceptable sizes catch truncated downloads before onnxruntime tries to parse them.
+_ASSET_MIN_SIZES = {
+    "model.onnx": 50 * 1024 * 1024,   # fp32 model is ~86 MB
+    "tokenizer.json": 100 * 1024,
+}
+_DOWNLOAD_HEADERS = {"User-Agent": "tostr/1.0"}
 
 class OnnxEmbeddingStrategy(EmbeddingStrategy):
     def __init__(self, batch_size: int = 32, batch_timeout: float = 1.5):
@@ -33,26 +40,48 @@ class OnnxEmbeddingStrategy(EmbeddingStrategy):
     def dimensions(self) -> int:
         return 384
 
+    def _asset_is_valid(self, filename: str) -> bool:
+        dest = self.model_dir / filename
+        min_size = _ASSET_MIN_SIZES.get(filename, 0)
+        return dest.exists() and dest.stat().st_size >= min_size
+
     def _ensure_assets_present(self):
-        if all(Path(p).exists() for p in (self.onnx_path, self.vocab_path)):
+        if all(self._asset_is_valid(f) for f in _ASSETS):
             return
 
         self.model_dir.mkdir(parents=True, exist_ok=True)
         logger.info("First-time setup: downloading embedding model from Hugging Face Hub (~86 MB)...")
 
         for filename, url in _ASSETS.items():
-            dest = self.model_dir / filename
-            if dest.exists():
+            if self._asset_is_valid(filename):
                 continue
-            logger.info(f"Downloading {filename}...")
+
+            dest = self.model_dir / filename
+            dest.unlink(missing_ok=True)  # remove any partial file from a prior interrupted download
+            tmp = dest.with_suffix(".tmp")
+            logger.info(f"Downloading {filename} ...")
             try:
-                urllib.request.urlretrieve(url, dest)
+                req = urllib.request.Request(url, headers=_DOWNLOAD_HEADERS)
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    with open(tmp, "wb") as f:
+                        shutil.copyfileobj(resp, f)
+                tmp.rename(dest)
             except Exception as e:
-                dest.unlink(missing_ok=True)
+                tmp.unlink(missing_ok=True)
                 raise RuntimeError(
                     f"Failed to download {filename} from Hugging Face Hub.\n"
                     f"URL: {url}\nError: {e}"
                 ) from e
+
+            actual = dest.stat().st_size
+            min_size = _ASSET_MIN_SIZES.get(filename, 0)
+            if actual < min_size:
+                dest.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"Download of {filename} appears incomplete ({actual / 1024 / 1024:.1f} MB). "
+                    f"Expected at least {min_size // 1024 // 1024} MB. "
+                    f"Please try again."
+                )
 
         logger.info("Embedding model cached to ~/.cache/tostr/")
 

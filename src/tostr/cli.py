@@ -231,6 +231,11 @@ def init(
     """Parse files and setup SQLite database."""
     configure_cli_logging(debug)
     start_time = time.perf_counter()
+    
+    embedding_model_path = Path.home() / ".cache" / "tostr" / "models" / "all-MiniLM-L6-v2" / "model.onnx"
+    if not embedding_model_path.exists():
+        typer.echo(f"Embedding model not found at {embedding_model_path}. Downloading from huggingface...")
+    
     typer.echo(f"Parsing and describing files...")
     try:
         if debug:
