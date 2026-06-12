@@ -115,7 +115,7 @@ Most MCP-compatible agents use a JSON configuration file. You can generally add 
   "mcpServers": {
     "tostr": {
       "command": "tostr",
-      "args": ["server"],
+      "args": ["start-mcp"],
       "env": {
         "GEMINI_API_KEY": "YOUR_API_KEY_HERE"
       }
