@@ -20,7 +20,7 @@ def mock_registry():
 
 @pytest.fixture
 def mock_parent_file():
-    mock_file = MagicMock(spec=BaseFile, uid="app")
+    mock_file = MagicMock(spec=BaseFile, uid="app.py")
     mock_file.__class__ = BaseFile
     return mock_file
 
@@ -33,5 +33,5 @@ def test_python_field_builder_extracts_assignment(python_parser, mock_registry, 
     field_obj = builder.from_node(field_node, parent=mock_parent_file)
     
     assert field_obj.name == "DEBUG_MODE"
-    assert field_obj.uid == "app.DEBUG_MODE"
+    assert field_obj.uid == "app.py#DEBUG_MODE"
     assert field_obj.signature == "DEBUG_MODE"

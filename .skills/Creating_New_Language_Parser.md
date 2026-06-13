@@ -4,6 +4,38 @@ This guide is a living document updated after each new language addition. Follow
 
 ---
 
+## 0. UID Architecture — Formal Definition (read this before writing any builder)
+
+Every struct has two distinct identities. Conflating them is the single most damaging mistake a language implementation can make (the original Python parser did, and it broke directory hydration, file skeletons, and watcher hash propagation).
+
+### UID (physical identity)
+
+```
+directory-uid := <relative-dir-path>                      e.g. src/app/services
+file-uid      := <relative-file-path>                     e.g. src/app/services/user_service.py
+code-uid      := <file-uid> "#" <code-path>
+code-path     := <name> ("." <name>)* [<pruned-params>]   e.g. UserService.create(self, name: str)
+```
+
+- Top-level class / free function / module field: `<file-uid>#<Name>` → `models.py#User`, `utils.py#clamp(value: float, low: float, high: float)`
+- Nested members chain with dots **after** the `#`: `models.py#User.validate(self)`, `models.py#Outer.Inner.method(x)`
+- Methods append the pruned parameter string so overloads have distinct UIDs.
+- The file UID is set by `BaseFileBuilder.from_path` (the relative path) — do not override it.
+
+**The prefix invariant (load-bearing):** every struct's UID begins with its parent's UID. Directory → file → class → method, all the way down. Hydration (`uid LIKE ?%` in `get_struct_by_uid`), skeleton generation, and watcher hash propagation (`WHERE uid = <filepath>`) all depend on it. If a builder breaks this invariant, the symptoms appear far away from the cause: directories that don't show their file children, `skeleton` crashing on file paths, hash updates silently no-oping.
+
+### Logical name (language identity)
+
+The dotted name that *source code* uses to refer to a struct: `app.services.user_service.UserService`. Imports, inheritance references, and namespaces are always expressed in this space — source code never mentions file paths. The logical name is **not** the UID.
+
+- Builders MUST set `BaseFile.package` to the file's dotted module/package path. That is the logical root the Registry uses to translate dotted names into physical UIDs (`Registry._resolve_logical_name`).
+- `package` is persisted to the DB. Never skip it — watcher-time partial reparses resolve imports against the DB, not memory.
+- `registry.get_struct_by_uid()` accepts both forms: exact UIDs match directly; dotted logical names fall back to package translation. Never hand-construct UIDs from dotted names in resolvers — go through the registry.
+
+> **Known deviation:** the Java builder currently emits `package.Class...` UIDs when a package declaration exists (the UID doubles as the logical name). This predates this definition and only survives because Java file UIDs equal their `path` column. Do NOT imitate it — new languages must follow the definition above. Java migration to this spec is planned.
+
+---
+
 ## 1. Prerequisites & Environment Setup
 
 Before starting, ensure the Tree-sitter grammar for the language is installed and registered.
@@ -84,6 +116,8 @@ Factory: implements `handles_extension()` and returns the right sub-builder for 
 
 ### `BaseFileBuilder` — most complex, most important
 
+**File identity:** keep the UID assigned by `BaseFileBuilder.from_path` (the relative filepath — never override it with a module name), and set `file_obj.package` to the dotted logical module path (see §0).
+
 **Three-phase parsing order (non-negotiable):**
 
 1. **Phase 1 — Parse imports first.** Build the `alias_map` (`{alias → original_uid}`) and the `imports` list before touching any method bodies. This is required because method dependency names reference aliases, and you need the map ready before children are parsed.
@@ -132,7 +166,7 @@ elif child.type == "decorated_definition":
 ### `BaseClassBuilder`
 - Extract `inherits` list (parent class names as strings — resolution happens later).
 - Recurse into class body using `FileBuilder._parse_children` (not a separate recursive method — reuse the same child-parsing logic).
-- UID format: `"{parent_package}.{ClassName}"` if parent is a file with a package, otherwise `"{parent_uid}.{ClassName}"`.
+- UID format (see §0): `"{file_uid}#{ClassName}"` when the parent is the file, `"{parent_uid}.{ClassName}"` when nested inside another class.
 
 ### `BaseMethodBuilder`
 - Extract `arity` — **exclude implicit self-like parameters** (`self`, `cls` in Python; nothing to exclude in Java). Callers never pass them, so arity must reflect what callers provide.
@@ -143,10 +177,11 @@ elif child.type == "decorated_definition":
   ```
 - Run the `DEPENDENCY_QUERY` on the method node (not the file node) using `QueryCursor.matches()`.
 - Build `dependency_names` as `[(name, arity, receiver, is_creation)]` tuples. For languages like Python where function calls and class instantiation use identical syntax, set `is_creation=False` for all and let the resolver try type resolution as a fallback.
-- UID format: `"{parent_uid}.{name}{parameters_string}"` — include the parameter string so overloads have distinct UIDs.
+- UID format (see §0): `"{file_uid}#{name}{parameters_string}"` for free functions, `"{parent_uid}.{name}{parameters_string}"` for methods inside a class — include the parameter string so overloads have distinct UIDs.
 
 ### `BaseFieldBuilder`
 - **Always parse `field_type`** from the type annotation. If `field_type` is left empty, `self.field.method()` resolution will silently fail — the resolver needs the type to find the class.
+- UID format (see §0): `"{file_uid}#{name}"` for module-level fields, `"{parent_uid}.{name}"` for class fields.
 - In Python: type annotation is in `assignment.child_by_field_name("type")`.
 - In Java: the type precedes the variable name in typed declaration nodes.
 
@@ -281,9 +316,11 @@ class PythonDependencyResolver(BaseDependencyResolver):
     def _get_potential_lookup_parents(self, method):
         parents = super()._get_potential_lookup_parents(method)
         # Named imports like "from utils import format_currency" store
-        # "utils.format_currency" in imports. The method UID is
-        # "utils.format_currency(amount)" — get_struct_by_uid("utils.format_currency")
-        # returns None. Add the module scope ("utils") so free functions are found.
+        # "utils.format_currency" in imports. The function's UID is
+        # "utils.py#format_currency(amount)" — looking up "utils.format_currency"
+        # finds nothing (the params differ, so even logical translation misses).
+        # Add the module scope ("utils") so resolve_methods can find the free
+        # function as a child of the file struct by name.
         parent_struct = method.parent
         imports = getattr(parent_struct, "imports", [])
         if not imports and parent_struct and parent_struct.parent:
@@ -406,7 +443,7 @@ The file-level import parser only walks top-level AST children (direct children 
 
 ### Free function import resolution gap
 
-`from utils import format_currency` stores `"utils.format_currency"` in `file.imports`. The Step 3 potential parents list includes `"utils.format_currency"` as a parent UID. But `registry.get_struct_by_uid("utils.format_currency")` returns `None` — the actual method UID is `"utils.format_currency(amount)"`. 
+`from utils import format_currency` stores `"utils.format_currency"` in `file.imports`. The Step 3 potential parents list includes `"utils.format_currency"` as a parent name. But looking it up returns `None` — the actual UID is `"utils.py#format_currency(amount)"`, and the trailing parameter string means even the registry's logical-name translation can't match it. 
 
 Fix: override `_get_potential_lookup_parents` to also add the module scope (`"utils"`) so `resolve_methods` can find the method as a child of the file struct. See `PythonDependencyResolver._get_potential_lookup_parents` in §6.
 
@@ -456,6 +493,8 @@ Example unsupported patterns for Python (document the WHY):
 
 ## 10. Verification Checklist
 
+- [ ] UIDs follow the §0 formal definition: file UID = relative path, code structs = `file.ext#Code.path(params)`, prefix invariant holds for every parent/child pair
+- [ ] `file.package` set to the dotted logical module path (and verified present in the DB after a parse)
 - [ ] Tree-sitter dependency added to `pyproject.toml` and `requirements.txt`
 - [ ] `language.py` correctly exports the language object
 - [ ] `builders.py` three-phase parsing: imports → children → alias normalization

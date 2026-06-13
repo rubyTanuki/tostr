@@ -37,10 +37,11 @@ class PythonFileBuilder(BaseFileBuilder):
         tree = parser.parse(body_bytes)
         file_obj.node = tree.root_node
 
-        # In Python, the package/module name is determined by the directory structure.
+        # UID stays the relative filepath (set by BaseFileBuilder.from_path) so all
+        # children are prefix-matchable. The dotted module path is the *logical* name,
+        # stored on `package` and resolved through Registry's logical-name lookup.
         rel_path = self.registry.relative_to_project(path)
         module_path = ".".join(rel_path.with_suffix("").parts).replace("/", ".").replace("\\", ".")
-        file_obj.uid = module_path
         file_obj.package = module_path
 
         # Phase 1: Parse imports first to build alias_map before children are parsed.
@@ -195,15 +196,12 @@ class PythonClassBuilder(BaseClassBuilder):
         
         uid = ""
         if isinstance(parent, BaseFile):
-            if parent.package:
-                uid = f"{parent.package}.{name}"
-            else:
-                uid = f"{parent.uid}#{name}"
+            uid = f"{parent.uid}#{name}"
         elif parent:
             uid = f"{parent.uid}.{name}"
         else:
             uid = name
-        
+
         instance = BaseClass(
             name=name,
             uid=uid,
@@ -260,10 +258,7 @@ class PythonMethodBuilder(BaseMethodBuilder):
         
         uid = ""
         if isinstance(parent, BaseFile):
-            if parent.package:
-                uid = f"{parent.package}.{name}{parameters_string}"
-            else:
-                uid = f"{parent.uid}#{name}{parameters_string}"
+            uid = f"{parent.uid}#{name}{parameters_string}"
         elif parent:
             uid = f"{parent.uid}.{name}{parameters_string}"
         else:
@@ -327,7 +322,13 @@ class PythonFieldBuilder(BaseFieldBuilder):
         if field_type:
             signature = f"{name}: {field_type}"
             
-        uid = f"{parent.uid}.{name}" if parent else name
+        uid = ""
+        if isinstance(parent, BaseFile):
+            uid = f"{parent.uid}#{name}"
+        elif parent:
+            uid = f"{parent.uid}.{name}"
+        else:
+            uid = name
 
         return BaseField(
             name=name,

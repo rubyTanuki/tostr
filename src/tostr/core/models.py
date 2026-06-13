@@ -256,6 +256,7 @@ class BaseFile(BaseStruct):
         data["imports"] = self.imports
         data["body"] = self.body
         data["diff_hash"] = self.diff_hash
+        data["package"] = self.package
         return data
 
 @dataclass(eq=False) 

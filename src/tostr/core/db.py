@@ -57,9 +57,15 @@ class SQLiteCache:
                     enum_constants JSON,
                     field_type TEXT,
                     arity INTEGER,
-                    dependency_names JSON
+                    dependency_names JSON,
+                    package TEXT
                 )
             """)
+
+            # Migration: older databases predate the package column
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(structs)").fetchall()}
+            if "package" not in existing_cols:
+                conn.execute("ALTER TABLE structs ADD COLUMN package TEXT")
 
             # EDGES TABLE
             conn.execute("""

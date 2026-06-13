@@ -27,6 +27,8 @@ class Registry:
         self.id_map: Dict[str, BaseStruct] = {}
         self.missing_uids: Set[str] = set()
         self.missing_packages: Set[str] = set()
+        self._logical_cache: Dict[str, str] = {}
+        self._resolving_logicals: Set[str] = set()
         self.root: Optional[BaseStruct] = None
         self.db = db
         self.config = ProjectConfig(project_path) if project_path else None
@@ -127,22 +129,49 @@ class Registry:
 
     def get_classes_in_package(self, package_name: str) -> List[BaseClass]:
         if package_name in self.missing_packages:
-            return [x for x in self.classes if x.uid.startswith(package_name + ".") or x.uid.startswith(package_name + "#")]
+            return self._classes_matching_package(package_name)
 
         if self.use_cache and self.db:
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
+                # Dotted class UIDs (current Java builder output)
                 cursor.execute(
-                    "SELECT uid FROM structs WHERE type = 'BaseClass' AND (uid LIKE ? OR uid LIKE ?)",
+                    "SELECT uid FROM structs WHERE type = 'class' AND (uid LIKE ? OR uid LIKE ?)",
                     (f"{package_name}.%", f"{package_name}#%")
                 )
-                rows = cursor.fetchall()
-                if not rows:
-                    self.missing_packages.add(package_name)
-                for row in rows:
-                    self.get_struct_by_uid(row[0])
-        
-        return [x for x in self.classes if x.uid.startswith(package_name + ".") or x.uid.startswith(package_name + "#")]
+                class_uids = [row[0] for row in cursor.fetchall()]
+                # Path-style UIDs: find files whose logical module path is in the package
+                cursor.execute(
+                    "SELECT uid FROM structs WHERE type = 'file' AND package IS NOT NULL AND package != '' AND (package = ? OR package LIKE ?)",
+                    (package_name, f"{package_name}.%")
+                )
+                file_uids = [row[0] for row in cursor.fetchall()]
+
+            if not class_uids and not file_uids:
+                self.missing_packages.add(package_name)
+            for uid in class_uids:
+                self.get_struct_by_uid(uid)
+            for uid in file_uids:
+                self.get_struct_by_uid(uid)
+
+        return self._classes_matching_package(package_name)
+
+    def _classes_matching_package(self, package_name: str) -> List[BaseClass]:
+        matches = []
+        for cls in self.classes:
+            if cls.uid.startswith((package_name + ".", package_name + "#")):
+                matches.append(cls)
+                continue
+            pkg = self._enclosing_file_package(cls)
+            if pkg and (pkg == package_name or pkg.startswith(package_name + ".")):
+                matches.append(cls)
+        return matches
+
+    def _enclosing_file_package(self, struct: BaseStruct) -> str:
+        node = struct
+        while node is not None and not isinstance(node, BaseFile):
+            node = getattr(node, "parent", None)
+        return getattr(node, "package", "") if node else ""
     
     def load_filepath(self, path: Path):
         logger.debug(f"Loading subtree {str(path)}")
@@ -214,13 +243,13 @@ class Registry:
     def get_struct_by_uid(self, uid: str) -> Optional[BaseStruct]:
         if uid in self.uid_map:
             return self.uid_map[uid]
-        
+
         if uid in self.missing_uids:
             return None
 
         if not self.use_cache or not self.db:
-            return None
-        
+            return self._resolve_logical_name(uid)
+
         logger.debug(f"Attempting to retrieve {uid} and its children from DB")
         from tostr.core.builders import BaseBuilder
         
@@ -234,11 +263,14 @@ class Registry:
             else:
                 cursor.execute("SELECT * FROM structs")
             node_rows = cursor.fetchall()
-            
+
             if not node_rows:
+                resolved = self._resolve_logical_name(uid)
+                if resolved:
+                    return resolved
                 self.missing_uids.add(uid)
                 return None
-                
+
             node_ids = [str(row["id"]) for row in node_rows]
             target_id = None
             
@@ -272,8 +304,58 @@ class Registry:
                 target_obj = self.id_map.get(str(_target_id))
                 if source_obj and target_obj:
                     target_obj.add_child(source_obj)
-                    
-        return self.id_map.get(target_id)
+
+        return self.id_map.get(target_id) or self._resolve_logical_name(uid)
+
+    def _resolve_logical_name(self, name: str) -> Optional[BaseStruct]:
+        """Translates a dotted logical name (what source code says: 'app.services.UserService')
+        into the struct at its physical path-based UID ('app/services.py#UserService').
+        Imports, namespaces, and inheritance references are always dotted names, so this
+        translation is required for cross-file resolution under path-based UIDs.
+        The logical root of each file is its `package` field."""
+        if not name or "#" in name or "/" in name or "\\" in name:
+            return None
+        if name in self._logical_cache:
+            return self.uid_map.get(self._logical_cache[name])
+        if name in self._resolving_logicals:
+            return None
+
+        self._resolving_logicals.add(name)
+        try:
+            # (package_length, file_uid, remainder-after-package or None for the file itself)
+            candidates = []
+            for f in self.files:
+                pkg = getattr(f, "package", "")
+                if not pkg:
+                    continue
+                if name == pkg:
+                    candidates.append((len(pkg), f.uid, None))
+                elif name.startswith(pkg + "."):
+                    candidates.append((len(pkg), f.uid, name[len(pkg) + 1:]))
+
+            if self.use_cache and self.db:
+                with self.db.get_connection() as conn:
+                    rows = conn.execute(
+                        "SELECT uid, package FROM structs WHERE type = 'file' AND package IS NOT NULL AND package != '' AND (package = ? OR ? LIKE package || '.%')",
+                        (name, name)
+                    ).fetchall()
+                for row in rows:
+                    file_uid, pkg = row[0], row[1]
+                    remainder = None if name == pkg else name[len(pkg) + 1:]
+                    candidates.append((len(pkg), file_uid, remainder))
+
+            # Longest package match wins (e.g. 'a.b' beats 'a' for 'a.b.Class')
+            for _, file_uid, remainder in sorted(candidates, key=lambda c: c[0], reverse=True):
+                file_struct = self.get_struct_by_uid(file_uid)
+                if not file_struct:
+                    continue
+                target = file_struct if remainder is None else self.uid_map.get(f"{file_uid}#{remainder}")
+                if target:
+                    self._logical_cache[name] = target.uid
+                    return target
+            return None
+        finally:
+            self._resolving_logicals.discard(name)
 
 
     def get_struct_by_id(self, id: str) -> Optional[BaseStruct]:
