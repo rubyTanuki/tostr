@@ -17,8 +17,18 @@ from tostr.core.providers import LanguageProvider
 from tostr.exceptions import APIKeyError, DatabaseNotFoundError
 
 def _verify_db_exists(target_path: Path):
-    if not os.path.exists(target_path):
-        raise DatabaseNotFoundError("Database not found. Run 'tostr init' first.")
+    """Ensure an initialized Tostr database exists for the given project path.
+
+    target_path is the project root; the actual database lives at
+    .tostr/cache.db inside it. Raising here (instead of letting SQLiteCache
+    lazily create an empty schema) gives the user a clean 'run init first'
+    message rather than a downstream stack trace.
+    """
+    db_path = Path(target_path) / ".tostr" / "cache.db"
+    if not db_path.exists():
+        raise DatabaseNotFoundError(
+            f"No Tostr database found at {db_path}. Run 'tostr init' first."
+        )
 
 def get_llm_client(progress_tracker: "ProgressTracker" = None):
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -188,6 +198,7 @@ async def skeleton_async(subpath: str, project_path: Path, depth: int = 7, files
 active_tasks = {}
 
 async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
+    _verify_db_exists(target_path)
     try:
         llm = get_llm_client()
     except APIKeyError:
