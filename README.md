@@ -7,7 +7,7 @@ Frontloading Agentic AI Code Context
 </h1>
 
 <p align="center">
-    <img src="./resources/demo.gif" alt="Demo GIF" width="860">
+https://github.com/user-attachments/assets/aadf0c67-4e4f-469e-82ff-097dae2cafa9
 </p>
 
 <p align="center">
