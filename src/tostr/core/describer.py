@@ -12,7 +12,47 @@ if TYPE_CHECKING:
     from tostr.semantic.embeddings.base import EmbeddingClient
 
 
-class LLMDescriber:
+class _DescriberBase:
+    """Shared embedding/progress plumbing for the describer implementations."""
+
+    embedder: EmbeddingClient
+
+    def _advance(self, struct: BaseStruct, phase: str, n: int = 1):
+        tracker = getattr(getattr(struct, 'registry', None), 'progress_tracker', None)
+        if tracker:
+            tracker.advance(phase, n)
+
+    def _handle_embed(self, struct: BaseStruct):
+        if struct.vector is not None:
+            self._advance(struct, 'embed', 1)
+        else:
+            self.embedder.enqueue(struct)
+
+
+class NoLLMDescriber(_DescriberBase):
+    """Duck-typed stand-in for LLMDescriber used in no-LLM mode.
+
+    Walks the struct tree and enqueues every describable struct for embedding
+    without generating any natural-language descriptions. Descriptions stay
+    empty; the embedder falls back to the struct's code (body/signature) so
+    semantic search still has signal. Mirrors LLMDescriber's contract of
+    enqueueing each non-field struct for embedding exactly once.
+    """
+
+    def __init__(self, embedder: EmbeddingClient):
+        self.embedder = embedder
+
+    async def describe(self, struct: BaseStruct):
+        self._walk(struct)
+
+    def _walk(self, struct: BaseStruct):
+        if not isinstance(struct, BaseField):
+            self._handle_embed(struct)
+        for child in struct.all_children:
+            self._walk(child)
+
+
+class LLMDescriber(_DescriberBase):
     def __init__(self, llm: LLMClient, embedder: EmbeddingClient):
         self.llm = llm
         self.embedder = embedder
@@ -27,17 +67,6 @@ class LLMDescriber:
         elif isinstance(struct, BaseMethod):
             self._describe_method(struct)
         # BaseField: no description needed
-
-    def _advance(self, struct: BaseStruct, phase: str, n: int = 1):
-        tracker = getattr(getattr(struct, 'registry', None), 'progress_tracker', None)
-        if tracker:
-            tracker.advance(phase, n)
-
-    def _handle_embed(self, struct: BaseStruct):
-        if struct.vector is not None:
-            self._advance(struct, 'embed', 1)
-        else:
-            self.embedder.enqueue(struct)
 
     async def _describe_directory(self, directory: Directory):
         # Early exit before recursion: if already described, children are assumed done too

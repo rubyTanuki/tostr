@@ -67,11 +67,29 @@ class EmbeddingClient:
                     await self._flush_batch(batch)
                 break
     
+    @staticmethod
+    def _embedding_text(struct: "BaseStruct") -> str:
+        """Builds the text to embed for a struct.
+
+        Normally this is the LLM-generated description. In no-LLM mode the
+        description is empty, so we fall back to the struct's own code so
+        semantic search still has signal. `body` already includes the
+        signature; directories have neither, so they fall back to their name.
+        """
+        description = getattr(struct, "description", "") or ""
+        if description:
+            return f"{struct.uid}: {description}"
+
+        body = getattr(struct, "body", "") or ""
+        signature = getattr(struct, "signature", "") or ""
+        fallback = body or signature or struct.name
+        return f"{struct.uid}: {fallback}"
+
     async def _flush_batch(self, batch: list["BaseStruct"]):
         if not batch:
             return
-        
-        descriptions = [f"{s.uid}: {s.description}" for s in batch]
+
+        descriptions = [self._embedding_text(s) for s in batch]
 
         # Offload the computation to the thread pool
         embeddings = await asyncio.to_thread(

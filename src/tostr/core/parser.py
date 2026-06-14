@@ -8,7 +8,7 @@ from loguru import logger
 from tostr.core.models import BaseFile, Directory, BaseStruct
 from tostr.core.registry import Registry
 from tostr.core.providers import LanguageProvider
-from tostr.core.describer import LLMDescriber
+from tostr.core.describer import LLMDescriber, NoLLMDescriber
 from tostr.exceptions import LanguageNotSupportedError
 
 class BaseParser(ABC):
@@ -109,7 +109,11 @@ class BaseParser(ABC):
     async def resolve_descriptions_async(self):
         self.embedder.start()
         if self.registry.root:
-            describer = LLMDescriber(self.llm, self.embedder)
+            if self.llm is None:
+                # No-LLM mode: skip descriptions, embed on code context only.
+                describer = NoLLMDescriber(self.embedder)
+            else:
+                describer = LLMDescriber(self.llm, self.embedder)
             await describer.describe(self.registry.root)
 
         await self.embedder.drain_and_stop()
