@@ -69,11 +69,12 @@ Alternatively, you can install it via standard `pip`:
 pip install tostr
 ```
 
-You will also need to configure a Google Gemini API key and save it as an environment variable. To create a new API key:
+If you wish to utilize tostr's struct descriptions, you will also need to configure a Google Gemini API key and save it as an environment variable. This is optional, as the embedding will just fall back to using code bodies and UIDs when a description isnt generated.
+
+To create a new API key:
 1. Go to the [Google AI Studio](https://aistudio.google.com/) and log in with your google email.
 2. Once logged in, in the bottom left click the `Get API Key` button.
-3. In the top right, click `Create API Key`
-> You may need to create a new project before making an API key. You can just name it `tostr`
+3. In the top right, click `Create API Key`. You may need to create a new project before making an API key. You can just name it `tostr`
 4. Name the key something like `Tostr API Key`. This name does not matter for the rest of the steps.
 5. Click the button next to the new key that says `copy API key` to copy the string to your clipboard. It should be a long random string with 39 characters.
 6. Save this key as an environment variable called `GEMINI_API_KEY` on your computer.
@@ -139,7 +140,7 @@ Before being able to use Tostr, the repository must be initialized using the CLI
 
 To manually initialize the repository, `cd` to the root of the project in a terminal window and run:
 ```
-tostr init . --language [LANGUAGE]
+tostr init .
 ```
 This creates the `.tostr` directory and initializes the default `.tostrignore` to exclude environment files, node_modules, build artifacts, and other files which are not needed in the project AST based on the desired language. It also creates a `config.toml` in your project's `.tostr/` directory, storing the projects configurations. Currently this is only the language, but more will be configured here in the future.
 
@@ -148,6 +149,12 @@ The `--language` flag is optional. If none is provided, tostr will parse each fi
 > Tostr currently only supports .java and .py, so the options for --language are 'java', 'py'.
 
 If you are running tostr on a project that already has an existing database but you want to reparse from the start, use the `--no-cache` flag.
+
+**Available Flags**:
+- `--use-cache`, `--no-cache`: Load the existing cache if it exists (use `--no-cache` to force a full reparse from scratch). Default is `True`
+- `--language`, `-l`: Restrict parsing to one language (e.g., `java`, `python`). Omit to auto-detect and parse all supported languages by extension. Default is `auto`
+- `--no-llm`: Skip LLM-generated descriptions (no API key required). Embeddings fall back to code context. Default is `False`
+- `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
 ## Traversing the graph
 Once the project is initialized, Tostr is ready to go! The CLI provides a rich, interactive way to explore your project's structure.
@@ -161,8 +168,12 @@ Tostr will print a beautiful tree structure of your root and its direct children
 
 <img src="./resources/skeleton_example.png" alt="Skeleton Example" width="560">
 
-
-> The `depth` parameter determines how many layers into the file tree should be skeletonized (default is 7).
+**Available Flags**:
+- `--pretty`, `--raw`: Pretty format output with line wrapping and indentation (disable for raw output). Default is `True`
+- `--depth`, `-d`: Depth to traverse for skeleton generation. Default is `4`
+- `--files-only`, `-f`: Only generate the skeleton for files, skipping individual classes/methods. Default is `False`
+- `--max-lines`, `-m`: Maximum number of lines to include in the output. Default is `500`
+- `--debug`, `--no-debug`: Enable debug logging. Default is `False`
 
 ### Searching Structs
 You can search for specific code components using semantic natural language queries:
@@ -170,6 +181,11 @@ You can search for specific code components using semantic natural language quer
 tostr search "PID controller"
 ```
 <img src="./resources/search_example.png" alt="Search Example" width="860">
+
+**Available Flags**:
+- `--filter`, `-f`: Filter results by struct type (e.g., `class`, `method`). Default is none (no filter)
+- `--top-k`, `-k`: Number of results to return. Default is `5`
+- `--debug`, `--no-debug`: Enable debug logging. Default is `False`
 
 ### Inspecting Structs
 Each struct (file, class, method, or field) can be inspected for deep detail, including its LLM-generated description and dependency graph:
@@ -180,16 +196,52 @@ tostr inspect C-c7766e98fa .
 
 <img src="./resources/inspect_example_1.png" alt="Inspect Example 1" width="860">
 
-#### Inspect Flags:
-* `--body`: Attaches the syntax-highlighted source code of the struct being inspected.
-* `--raw`: Disables rich formatting and indentation for raw output.
-* `--max-lines`: Limits the output length (useful for large classes).
-
 ```
 tostr inspect M-bc1cb7aeff --body .
 ```
 <img src="./resources/inspect_example_2.png" alt="Inspect Example 2" width="760">
 
+**Available Flags**:
+- `--body`, `--no-body`: Attach the syntax-highlighted source code of the struct being inspected. Default is `False`
+- `--pretty`, `--raw`: Pretty format output with line wrapping and indentation (disable for raw output). Default is `True`
+- `--max-lines`, `-m`: Maximum number of lines to include in the output (useful for large classes). Default is `500`
+- `--debug`, `--no-debug`: Enable debug logging. Default is `False`
+
+
+## Other Commands
+
+Beyond traversing the graph, Tostr provides a handful of commands for managing the database, keeping it in sync, and running the MCP server. Every command accepts an optional `path` argument (defaulting to the current directory `.`) pointing at the project root, and every command supports `--debug` / `--no-debug` (`-d` / `-nd`) to enable debug logging.
+
+### `tostr status`
+Show whether Tostr has been initialized in a project, along with the database location, size, last-updated time, and per-type struct counts.
+```
+tostr status .
+```
+**Available Flags**:
+- `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
+
+### `tostr watch`
+Watch the project for file changes and incrementally update the SQLite database as you save, add, or delete files. This runs in the foreground until interrupted (the MCP server performs the same incremental diffing automatically while running).
+```
+tostr watch .
+```
+**Available Flags**:
+- `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
+
+### `tostr clean`
+Clean (wipe) the SQLite database for a project, removing the cached AST and dependency graph. Useful before a fresh `init` or to reclaim space.
+```
+tostr clean .
+```
+**Available Flags**:
+- `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
+
+### `tostr start-mcp`
+Start the bare MCP server, which then awaits agent initialization over the Model Context Protocol. This is the command referenced in the [MCP configuration](#connecting-the-mcp-to-your-agent) above; you generally won't run it manually, as your agent launches it for you.
+```
+tostr start-mcp
+```
+This command takes no flags.
 
 ### Contributing to Tostr
 
