@@ -219,10 +219,17 @@ def init(
             help="The primary language of the project (e.g., 'java', 'python')"
         )
     ] = "java",
-    debug: Annotated[
-        bool, 
+    no_llm: Annotated[
+        bool,
         typer.Option(
-            "--debug/--no-debug", 
+            "--no-llm",
+            help="Skip LLM-generated descriptions (no API key required). Embeddings fall back to code context."
+        )
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug/--no-debug",
             "-d/-nd",
             help="Enable debug logging"
             )
@@ -239,7 +246,7 @@ def init(
     typer.echo(f"Parsing and describing files...")
     try:
         if debug:
-            asyncio.run(init_async(path, use_cache, language, None))
+            asyncio.run(init_async(path, use_cache, language, None, no_llm=no_llm))
         else:
             with Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -247,8 +254,9 @@ def init(
                 TaskProgressColumn(),
                 TimeElapsedColumn(),
             ) as progress:
-                progress_tracker = ProgressTracker(progress)
-                asyncio.run(init_async(path, use_cache, language, progress_tracker))
+                # No describe bar in no-LLM mode since descriptions are skipped.
+                progress_tracker = ProgressTracker(progress, include_describe=not no_llm)
+                asyncio.run(init_async(path, use_cache, language, progress_tracker, no_llm=no_llm))
                 progress_tracker.finish()
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)

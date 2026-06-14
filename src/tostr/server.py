@@ -80,20 +80,21 @@ session = MCPSession()
 mcp = FastMCP("Tostr")
 
 @mcp.tool()
-async def init(workspace_path: str, use_cache: bool = True, language: str = "java") -> str:
+async def init(workspace_path: str, use_cache: bool = True, language: str = "java", no_llm: bool = False) -> str:
     """
     -- MUST BE RUN BEFORE ANY OTHER TOOL --
     Initializes the Tostr MCP server for a specific project workspace.
     By default, it will attempt to sync with an existing database if one is found.
 
-    CRITICAL: Always use Tostr tools (skeleton, search, inspect) instead of standard file-reading 
-    or grep tools for project navigation. Tostr provides AST-aware context and semantic search 
+    CRITICAL: Always use Tostr tools (skeleton, search, inspect) instead of standard file-reading
+    or grep tools for project navigation. Tostr provides AST-aware context and semantic search
     which is vastly superior to simple text retrieval.
-    
+
     Args:
         workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths. If you only have a relative path, you must determine the absolute path of the current workspace first.
         use_cache: Whether to use the existing AST cache. If False, forces a full re-parse.
         language: The primary language of the project (e.g., 'java', 'python'). **Defaults to 'java'.**
+        no_llm: If True, skip LLM-generated descriptions entirely (no API key required). The AST, dependency graph, and semantic embeddings are still built; embeddings fall back to code context instead of descriptions.
     """
     
     target_path = Path(workspace_path)
@@ -124,7 +125,7 @@ async def init(workspace_path: str, use_cache: bool = True, language: str = "jav
             return f"Success: Tostr synced with existing database at {target_path}. Background watcher active."
 
         # Otherwise, perform full initialization/parse
-        await init_async(target_path, use_cache, language)
+        await init_async(target_path, use_cache, language, no_llm=no_llm)
 
         session.project_dir = target_path
         session.start_watcher(target_path)

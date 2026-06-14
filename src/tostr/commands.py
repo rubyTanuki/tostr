@@ -73,8 +73,8 @@ def get_status(target_path: Path) -> dict:
 
     return status
 
-async def _build_ast_async(target_path: Path, use_cache: bool = True, progress_tracker: "ProgressTracker" = None) -> BaseParser:
-    llm = get_llm_client(progress_tracker=progress_tracker)
+async def _build_ast_async(target_path: Path, use_cache: bool = True, progress_tracker: "ProgressTracker" = None, no_llm: bool = False) -> BaseParser:
+    llm = None if no_llm else get_llm_client(progress_tracker=progress_tracker)
     embedder = get_cached_embedding_client(progress_tracker=progress_tracker)
     db = SQLiteCache(target_path / ".tostr" / "cache.db")
     registry = Registry(use_cache=use_cache, db=db, project_path=target_path, progress_tracker=progress_tracker)
@@ -107,7 +107,7 @@ def _write_default_ignore(target_path: Path, ignore_type: str):
     else:
         logger.warning(f"No default ignore template found for {ignore_type} at {template_path}")
 
-async def init_async(target_path: Path, use_cache: bool = True, language: str = "java", progress_tracker: "ProgressTracker" = None):
+async def init_async(target_path: Path, use_cache: bool = True, language: str = "java", progress_tracker: "ProgressTracker" = None, no_llm: bool = False):
     """Core asynchronous logic for scraping and parsing."""
     
     # Ensure .tostr directory exists
@@ -124,7 +124,7 @@ async def init_async(target_path: Path, use_cache: bool = True, language: str = 
     _write_default_ignore(target_path, language)
 
     # Parse and resolve AST
-    parser = await _build_ast_async(target_path, use_cache=use_cache, progress_tracker=progress_tracker)
+    parser = await _build_ast_async(target_path, use_cache=use_cache, progress_tracker=progress_tracker, no_llm=no_llm)
         
     # Write Cache
     parser.registry.save_to_cache()
@@ -178,7 +178,11 @@ async def skeleton_async(subpath: str, project_path: Path, depth: int = 7, files
 active_tasks = {}
 
 async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
-    llm = get_llm_client()
+    try:
+        llm = get_llm_client()
+    except APIKeyError:
+        llm = None
+        logger.warning("No API key found; watcher running in no-LLM mode (embeddings only, descriptions skipped).")
     config = ProjectConfig(target_path)
 
     logger.info("Starting Listener")
