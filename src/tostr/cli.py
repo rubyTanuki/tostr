@@ -15,9 +15,8 @@ from tostr.commands import (
     init_async, 
     inspect_async, 
     skeleton_async, 
-    watch_async, 
+    watch_async,
     clean_db,
-    resolve_uid_to_id,
     search_async,
     get_status
 )
@@ -266,42 +265,6 @@ def init(
     elapsed_time = end_time - start_time
     typer.echo(f"✅ Finished initializing project in {elapsed_time:.4f} seconds.")
 
-
-@app.command()
-def resolve(
-    uid: Annotated[
-        str, 
-        typer.Argument(help="The UID to resolve to an ID")
-    ],
-    path: Path = typer.Argument(
-        ".", 
-        help="Path to the project directory to scan",
-        exists=True,
-        file_okay=False,
-        dir_okay=True,
-        resolve_path=True
-    ),
-    debug: Annotated[
-        bool, 
-        typer.Option(
-            "--debug/--no-debug", 
-            "-d/-nd",
-            help="Enable debug logging"
-            )
-    ] = False
-):
-    """Resolve a UID to its corresponding struct ID."""
-    configure_cli_logging(debug)
-    try:
-        result = resolve_uid_to_id(uid, path)
-        if result:
-            print(result)
-        else:
-            typer.secho(f"❌ Error: No struct found with UID '{uid}'", fg="red", err=True)
-            raise typer.Exit(code=1)
-    except TostrError as e:
-        typer.secho(f"❌ Error: {e}", fg="red", err=True)
-        raise typer.Exit(code=1)
 
 def _render_inspect(result: Union[InspectResult, str], pretty: bool = True, language: str = "java"):
     if isinstance(result, str):
@@ -557,9 +520,9 @@ def skeleton(
         typer.Option(
             "--depth",
             "-d",
-            help="Depth to traverse for skeleton generation (default: 7)"
+            help="Depth to traverse for skeleton generation (default: 4)"
         )
-    ] = 7, 
+    ] = 4,
     files_only: Annotated[
         bool,
         typer.Option(
