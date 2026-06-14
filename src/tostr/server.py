@@ -2,6 +2,7 @@ from __future__ import annotations
 import threading
 import asyncio
 import json
+import re
 from pathlib import Path
 from fastmcp import FastMCP
 from loguru import logger
@@ -210,10 +211,17 @@ def _render_inspect(result: Union[InspectResult, str]) -> str:
         
     return "\n".join(lines)
 
+def _short_uid(uid: str) -> str:
+    """Trim the redundant filepath prefix from a code struct's UID.
+
+    Files/directories (no '#') are returned unchanged; classes/methods keep the
+    '#member' portion since their parent file already shows the path."""
+    return re.sub(r"^[^#]*#", "#", uid)
+
 def _render_skeleton(result: SkeletonResult, indent: int = 0) -> str:
     """Recursively renders a simple text skeleton tree."""
     indent_str = "    " * indent
-    line = f"{indent_str}{result.id} | {result.uid}"
+    line = f"{indent_str}{result.id} | {_short_uid(result.uid)}"
     output = [line]
     for child in result.children:
         output.append(_render_skeleton(child, indent + 1))

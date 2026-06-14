@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import re
 import time
 from pathlib import Path
 import typer
@@ -346,11 +347,18 @@ def _render_inspect(result: Union[InspectResult, str], pretty: bool = True, lang
         )
         console.print(syntax)
 
+def _short_uid(uid: str) -> str:
+    """Trim the redundant filepath prefix from a code struct's UID.
+
+    Files/directories (no '#') are returned unchanged; classes/methods keep the
+    '#member' portion since their parent file already shows the path."""
+    return re.sub(r"^[^#]*#", "#", uid)
+
 def _render_skeleton(result: SkeletonResult, tree: Tree = None) -> Tree:
     """Recursively builds a Rich Tree for the skeleton."""
     label = Text()
     label.append(result.id, style="tostr.uid")
-    label.append(f" | {result.uid}")
+    label.append(f" | {_short_uid(result.uid)}")
     
     if tree is None:
         tree = Tree(label)
