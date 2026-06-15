@@ -37,6 +37,9 @@ tostr = "tostr.cli:app"
 pythonpath = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: tests that build a real DB / run full init and depend on test-code fixtures and the embedding model binary. Skipped by default; run with `pytest --integration` (see conftest.py).",
+]
 
 [tool.setuptools_scm]
 

@@ -32,5 +32,7 @@ jobs:
         python -m pip install -e ".[test]"
 
     - name: Run Test Engine
+      # Integration tests are skipped by default (they build a real DB and download the
+      # embedding model). Pass --integration to include them; see conftest.py.
       run: |
         python -m pytest
