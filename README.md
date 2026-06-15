@@ -62,7 +62,7 @@ Tostr is available on PyPI and can be installed via `pip` or `pipx`. Due to its 
 ```bash
 pipx install tostr
 ```
-> If you don't have pipx, you can download it easily via `brew install pipx` on mac or `python -m pip install --user pipx` on windows.
+> If you don't have pipx, you can download it easily via `brew install pipx` on mac or `python -m pip install --user pipx; python -m pipx ensurepath` on windows.
 
 Alternatively, you can install it via standard `pip`:
 ```bash
