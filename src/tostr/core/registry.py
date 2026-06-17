@@ -3,7 +3,6 @@ from collections import defaultdict
 from typing import List, Dict, Optional, TYPE_CHECKING, Set
 from pathlib import Path
 import json
-import hashlib
 import sqlite_vec
 import asyncio
 from loguru import logger
@@ -404,55 +403,6 @@ class Registry:
             conn.execute("DELETE FROM edges WHERE source_id = ?", (struct.id,))
             if edges:
                 conn.executemany("INSERT INTO edges (source_id, target_id, edge_type) VALUES (?, ?, ?)", edges)
-            conn.commit()
-
-    def propagate_hash_update(self, struct_uid: str):
-        """Iteratively updates the distributed hashes of all ancestors of a struct in the DB."""
-        if not self.db:
-            return
-
-        with self.db.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 1. Get the initial ID of the struct
-            cursor.execute("SELECT id FROM structs WHERE uid = ?", (struct_uid,))
-            row = cursor.fetchone()
-            if not row:
-                logger.debug(f"Could not find struct with UID {struct_uid} to propagate hash update.")
-                return
-            current_id = row[0]
-
-            while True:
-                # 2. Find the parent
-                cursor.execute(
-                    "SELECT target_id FROM edges WHERE source_id = ? AND edge_type = 'is_child_of'", 
-                    (current_id,)
-                )
-                parent_row = cursor.fetchone()
-                if not parent_row:
-                    break
-                
-                parent_id = parent_row[0]
-                
-                # 3. Get all children's hashes for this parent
-                cursor.execute("""
-                    SELECT diff_hash FROM structs 
-                    WHERE id IN (SELECT source_id FROM edges WHERE target_id = ? AND edge_type = 'is_child_of')
-                """, (parent_id,))
-                child_hashes = [r[0] for r in cursor.fetchall() if r[0]]
-                
-                if not child_hashes:
-                    new_hash = ""
-                else:
-                    child_hashes.sort()
-                    new_hash = hashlib.md5("".join(child_hashes).encode("utf-8")).hexdigest()
-                
-                # 4. Update the parent's hash
-                cursor.execute("UPDATE structs SET diff_hash = ? WHERE id = ?", (new_hash, parent_id))
-                
-                # 5. Move up the tree
-                current_id = parent_id
-            
             conn.commit()
 
     def save_to_cache(self, stale: bool = False):

@@ -297,11 +297,6 @@ async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLM
         await asyncio.to_thread(registry.save_to_cache, stale=True)
         logger.debug("Wrote Cache w/ stale descriptions")
 
-        # Struct UIDs are stored relative to the project root, so the hash-propagation
-        # lookup must use the relative path even though `filepath` may be absolute.
-        rel_uid = str(registry.relative_to_project(Path(filepath)))
-        await asyncio.to_thread(registry.propagate_hash_update, rel_uid)
-        
         # resolve the descriptions and do the second cache write
         await parser.resolve_descriptions_async()
         await asyncio.to_thread(registry.save_to_cache)

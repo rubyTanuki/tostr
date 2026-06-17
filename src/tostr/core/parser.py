@@ -69,15 +69,11 @@ class BaseParser(ABC):
                 else:
                     file = self.parse_file(path, parent=root)
                     if file:
-                        file.calculate_distributed_hash()
                         self.registry.add_struct(file)
                         root.add_child(file)
-            
-            root.calculate_distributed_hash()
         else:
             file = self.parse_file(subpath)
             if file:
-                file.calculate_distributed_hash()
                 self.registry.root = file
                 self.registry.add_struct(file)
 

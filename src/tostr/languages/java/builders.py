@@ -31,7 +31,7 @@ class JavaFileBuilder(BaseFileBuilder):
         with open(path, "rb") as f:
             body_bytes = f.read()
         file_obj.body = body_bytes.decode("utf-8")
-        file_obj.diff_hash = hashlib.md5(body_bytes).hexdigest() # Fallback until distributed hash is calculated
+        file_obj.diff_hash = hashlib.md5(body_bytes).hexdigest() # hash of the file's text body
         
         parser = Parser(JAVA_LANGUAGE)
         tree = parser.parse(body_bytes)

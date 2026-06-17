@@ -141,15 +141,6 @@ class BaseStruct(ABC):
             return
         self.parent = parent
 
-    def calculate_distributed_hash(self):
-        """Calculates diff_hash based on direct children's hashes."""
-        if not self.all_children:
-            return
-
-        child_hashes = sorted([child.diff_hash for child in self.all_children if getattr(child, "diff_hash", None)])
-        if child_hashes:
-            self.diff_hash = hashlib.md5("".join(child_hashes).encode("utf-8")).hexdigest()
-    
     def add_dependency(self, target: BaseStruct):
         if target is self:
             return
