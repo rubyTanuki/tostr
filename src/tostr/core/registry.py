@@ -24,9 +24,6 @@ class Registry:
         self.use_cache = use_cache
         self.uid_map: Dict[str, BaseStruct] = {}
         self.id_map: Dict[str, BaseStruct] = {}
-        # Dependents (source_ids) whose edges pointed at structs removed during the last prune;
-        # populated by pruning so a later pass can re-resolve them (Phase 4). See save_to_cache.
-        self.inbound_reresolve_worklist: Set[str] = set()
         self.missing_uids: Set[str] = set()
         self.missing_packages: Set[str] = set()
         self._logical_cache: Dict[str, str] = {}
@@ -419,26 +416,19 @@ class Registry:
             return conn.execute("SELECT 1 FROM structs WHERE uid = ? LIMIT 1", (uid,)).fetchone() is not None
 
     def _delete_struct_ids(self, conn, ids: Set[str]) -> Set[str]:
-        """Hard-delete the given struct ids and everything attached to them — edges (both
-        directions) and vectors. Before deleting, records the *dependents* of these structs
-        (callers whose depends_on[/fuzzy] edges point at them) into `inbound_reresolve_worklist`
-        so a later pass can re-resolve or drop those now-broken edges; they would otherwise be
-        silently lost here. Operates on the caller's connection (no commit). Returns the ids."""
+        """Hard-delete the given struct ids and everything attached to them — edges in BOTH
+        directions and vectors. Deleting inbound edges (target_id IN ids) is what keeps removed/
+        renamed structs from leaving dangling references behind; those dependents simply lose the
+        edge and re-form it the next time their own file is reparsed (or on a full reindex). We
+        deliberately do NOT re-resolve dependents here — see the plan's Phase 4 for the rationale
+        (Python's parameterless identity and Java's arity mean a dropped edge is either genuinely
+        broken or only a fuzzy match anyway). Operates on the caller's connection (no commit)."""
         ids = {str(i) for i in ids}
         if not ids:
             return set()
         cur = conn.cursor()
         ph = ",".join("?" * len(ids))
         rp = list(ids)
-        dependents = {
-            str(r[0]) for r in cur.execute(
-                f"SELECT DISTINCT source_id FROM edges WHERE target_id IN ({ph}) AND edge_type LIKE 'depends_on%'",
-                rp,
-            ).fetchall()
-        }
-        # Don't ask a struct that's itself being removed to re-resolve.
-        self.inbound_reresolve_worklist |= (dependents - ids)
-
         cur.execute(f"DELETE FROM structs WHERE id IN ({ph})", rp)
         cur.execute(f"DELETE FROM edges WHERE source_id IN ({ph})", rp)
         cur.execute(f"DELETE FROM edges WHERE target_id IN ({ph})", rp)

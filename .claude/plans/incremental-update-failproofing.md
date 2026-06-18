@@ -108,9 +108,9 @@ missing file and removes nothing.
 - [x] Routed `Change.deleted` in `watch_async` to a dedicated `process_file_deletion` (no longer funneled
       through `process_single_file`, which used to throw on the missing file and remove nothing).
 - [x] `Registry.delete_path_subtree(path_str)` purges every struct at the path or beneath it
-      (`path = ? OR path LIKE ? || '/%'`), plus edges (both directions) and vectors. Refactored the shared
-      teardown into `_delete_struct_ids` (used by both prune and delete); it also records inbound dependents
-      into `inbound_reresolve_worklist` for Phase 4. (`registry.py`, 2026-06-17)
+      (`path = ? OR path LIKE ? || '/%'`), plus edges (both directions) and vectors. Shared teardown lives in
+      `_delete_struct_ids` (used by both prune and delete); deleting inbound edges is what prevents dangling
+      references — dependents simply re-form their edge on their own next reparse (see Phase 4). (`registry.py`)
 - [x] Directory deletion cascades via the path-prefix match (one code path handles file *and* dir removal).
 - [x] Rename/move = `deleted(old)+added(new)`: handled by the two independent watcher events
       (added → `process_single_file`, deleted → `process_file_deletion`), keyed by distinct paths in `active_tasks`.
@@ -126,18 +126,42 @@ loops). Pre-existing latent bug; surfaced once enough embedder-using tests ran i
 
 ---
 
-## Phase 4 — Inbound dependency re-resolution
+## Phase 4 — Inbound dependency policy: drop-and-heal  ✅ resolved (no re-resolution)
 
-When a symbol's id genuinely changes (rename/move in Python; type/arity change in Java), its dependents
-must be repointed or dropped — never blanket-invalidated.
+**Decision (2026-06-17): do NOT re-resolve dependents. Dropping the inbound edge is correct and sufficient.**
+Phases 2/3 already delete inbound edges (`target_id IN removed`) so nothing dangles. We add no re-resolution
+on top, and the `inbound_reresolve_worklist` scaffolding has been removed as dead weight.
 
-- [ ] For each changed/removed id, gather inbound callers via `SELECT source_id FROM edges WHERE target_id = old_id`.
-- [ ] Load only those callers, re-run their recorded `dependency_names` against the new symbol table;
-      per edge, **rewrite** target to the new id (still matches) or **drop** it (genuinely broken call).
-- [ ] Never touch unrelated callers.
+Rationale (why re-resolution buys ~nothing under the Phase-1 identity scheme):
+- **Python** (parameterless identity `Class.name(...)`): an `id` only changes on rename / move-to-another-class
+  / delete. In every case the caller's reference genuinely no longer resolves, so dropping is *correct* and
+  re-resolution would find nothing. Param/default/annotation/arity edits don't change the id at all → no edge
+  is dropped in the first place. Re-resolution adds literally nothing.
+- **Java** (`Class.name(types)`): rename / incompatible-type / arity changes break the caller → drop correct.
+  The lone case where a dropped edge was still valid is a *compatible* type refactor (widening `int`→`long`,
+  generalizing `ArrayList`→`List`), and because overloads resolve by arity (not argument-type inference),
+  re-resolution would only recover a **fuzzy** edge anyway. Marginal, Java-only, and it heals on the caller's
+  next save.
 
-**Exit / tests:** rename a called method → caller edge repointed; delete it → caller edge dropped;
-cosmetic edit → zero inbound churn (proves Phase 1 is doing its job).
+A dropped edge is clean *under-connection* (safe for a context engine) rather than a stale edge pointing at a
+dead id. Two cases are accepted to heal on the dependent's next reparse or a full reindex (consistent with the
+already-unavoidable forward-reference case below):
+- a Java caller of a compatible-type refactor (loses one fuzzy edge until its next save);
+- **forward references** — B references a symbol that didn't exist when B was parsed; later it's added. There's
+  no edge to capture and no reverse index of unresolved call-names, so this is unsolvable incrementally and
+  always required a reparse/reindex. `dependency_names` *is* persisted, so a targeted re-resolve of a *known*
+  dependent is cheap — but finding *unknown* dependents is a full project scan, hence reindex territory.
+
+**Healing model (future work, tracked here for context — NOT this phase):** a fast, silent reparse/re-resolve
+that reuses committed descriptions + vectors (the AST is cheap; only descriptions/vectors are expensive). Avery
+plans: git hooks that JSON-serialize the expensive artifacts into version control, a reparse on `git pull` that
+repopulates from the committed artifacts without regeneration, and optionally a per-project toggle at MCP startup
+or a `tostr` scheduled task / daemon interval. Folds naturally into Phase 8's "full reindex heals everything"
+guarantee.
+
+**Exit:** ✅ nothing to build. Behavior covered by Phase 2/3 tests (`test_renamed_method_drops_old_identity`,
+`test_removing_depended_on_class_cleans_cross_file_edges`, `test_deleted_file_is_purged`) — all assert no
+dangling edges after the drop.
 
 ---
 
