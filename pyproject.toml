@@ -27,7 +27,8 @@ dependencies = [
     "pathspec",
     "sqlite-vec",
     "onnxruntime",
-    "tokenizers"
+    "tokenizers",
+    "ollama"
 ]
 
 [project.scripts]
