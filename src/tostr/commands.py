@@ -31,36 +31,11 @@ def _verify_db_exists(target_path: Path):
         )
 
 def get_llm_client(progress_tracker: "ProgressTracker" = None):
-    provider = os.getenv("TOSTR_LLM_PROVIDER", "gemini").lower()
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if GEMINI_API_KEY is None:
+        raise APIKeyError("API key not found.")
     
-    if provider == "ollama":
-        from tostr.semantic.llm import OllamaStrategy
-        model_name = os.getenv("TOSTR_LLM_MODEL")
-        base_url = os.getenv("TOSTR_LLM_BASE_URL", "http://localhost:11434")
-        
-        if not model_name:
-            try:
-                import ollama
-                client = ollama.Client(host=base_url)
-                models = client.list()
-                if models and 'models' in models and len(models['models']) > 0:
-                    model_name = models['models'][0]['name']
-                    logger.info(f"Auto-detected available Ollama model: {model_name}")
-                else:
-                    model_name = "llama3"
-            except Exception as e:
-                logger.warning(f"Could not auto-detect Ollama models, defaulting to llama3: {e}")
-                model_name = "llama3"
-                
-        logger.info(f"Using local Ollama model: {model_name} at {base_url}")
-        strategy = OllamaStrategy(model_name=model_name, base_url=base_url)
-
-    else:
-        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-        if GEMINI_API_KEY is None:
-            raise APIKeyError("API key not found. Set GEMINI_API_KEY or use TOSTR_LLM_PROVIDER=ollama")
-        strategy = GeminiStrategy(api_key=GEMINI_API_KEY)
-        
+    strategy = GeminiStrategy(api_key=GEMINI_API_KEY)
     return LLMClient(strategy=strategy, progress_tracker=progress_tracker)
 
 @lru_cache(maxsize=1)

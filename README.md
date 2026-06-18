@@ -84,21 +84,11 @@ To create a new API key:
 I would suggest setting up a payment method in the Google AI Studio so you can get the limits of the Tier 1 payment tier. Once set up, using tostr should cost only a couple cents per project if anything, since it uses the `Gemini Flash-Lite` model for all its description generation. You can very easily set a spend limit in Google's UI if you like by going to the `Spend` tab after creating your key.
 
 #### Installing Environment Variables on Mac:
-To expose your API key or local model configurations to tostr in a specific terminal session, run these commands:
-
-For Gemini (Default):
+To expose your API key to tostr in a specific terminal session, run this command:
 ```bash
 export GEMINI_API_KEY=[your api key]
 ```
-
-For Local LLM (Ollama):
-```bash
-export TOSTR_LLM_PROVIDER="ollama"
-export TOSTR_LLM_MODEL="llama3" # Optional, defaults to llama3
-export TOSTR_LLM_BASE_URL="http://localhost:11434" # Optional
-```
-
-> This will only save the keys in the current session. To save the key permanently and system-wide, follow the instructions [here](https://www.youtube.com/watch?v=nfcAcfpeQ0Q)
+> This will only save the key in the current session. To save the key permanently and system-wide, follow the instructions [here](https://www.youtube.com/watch?v=nfcAcfpeQ0Q)
 
 #### Installing Environment Variables on Windows:
 In order to save environment variables on Windows, follow these steps.
@@ -109,7 +99,7 @@ In order to save environment variables on Windows, follow these steps.
     * **User variables**: Only accessible by your specific Windows account.
     * **System variables**: Accessible by all users on the computer (requires Administrator privileges).
 4. Click `New...` under the chosen section
-5. For Gemini, enter `GEMINI_API_KEY` in the name, and paste your API key from the Google AI Studio. For Local LLM, enter `TOSTR_LLM_PROVIDER` and set the value to `ollama`. You can optionally also set `TOSTR_LLM_MODEL`.
+5. Enter `GEMINI_API_KEY` in the name, and paste your API key from the Google AI Studio
 6. Click OK on all open windows to save the settings.
 > Note: You must restart any open command prompts for them to recognize the new variable.
 
