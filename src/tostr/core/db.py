@@ -26,11 +26,19 @@ class SQLiteCache:
 
     def init_db(self):
         """Initializes the database schema for the AST Graph."""
-        
+        from tostr.core.cache_version import CURRENT_CACHE_VERSION
+
         with self.get_connection() as conn:
+            # Detect a brand-new cache *before* CREATE TABLE IF NOT EXISTS masks it, so we only
+            # stamp the format version on creation — never silently re-stamp an existing (possibly
+            # stale) cache, which would hide it from the compatibility check.
+            is_fresh = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='structs'"
+            ).fetchone() is None
+
             conn.execute("PRAGMA journal_mode = WAL;")
             conn.execute("PRAGMA synchronous = NORMAL;")
-            conn.execute("PRAGMA foreign_keys = ON;") 
+            conn.execute("PRAGMA foreign_keys = ON;")
             
             # NODES TABLE
             conn.execute("""
@@ -96,5 +104,8 @@ class SQLiteCache:
                     vector FLOAT[384]
                 )
             """)
-            
+
+            if is_fresh:
+                conn.execute(f"PRAGMA user_version = {CURRENT_CACHE_VERSION}")
+
             conn.commit()

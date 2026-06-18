@@ -65,8 +65,14 @@ Goal: cosmetic signature edits stop churning ids. This alone removes ~90% of the
       runs after UIDs exist, so it can't influence identity).
 - [ ] **Logical-name translation** (`registry._resolve_logical_name`): try `remainder` then
       `remainder + "(...)"` so Python methods resolve directly (optional cleanup, now possible).
-- [ ] **Migration**: bump a DB/schema version marker; require `tostr init` re-parse (old `(self, rate)`
-      rows would otherwise orphan). Document in release notes.
+- [x] **Migration / version gating** (2026-06-17): data-driven cache-format versioning in
+      `core/cache_version.py` — an append-only `CACHE_FORMAT_HISTORY` of `FormatVersion(n, breaking, summary)`;
+      the UID change is v1 (breaking). Stamped into the DB header via `PRAGMA user_version` (set only on a
+      *fresh* create in `db.init_db`, so a stale cache's version is never masked). `_verify_db_exists` rejects
+      incompatible caches with a clear "run tostr init" (`CacheFormatError`); `init_async` auto-wipes an
+      incompatible cache before rebuilding so `tostr init` alone fixes it. Future breaking change = one append
+      to the history list with `breaking=True`; the comparison logic reads the flag (no code edits).
+      Tested in `tests/test_cache_version.py`.
 - [ ] Document `@typing.overload` stub collapse as accepted in `languages/python/dependency_patterns.md`.
 - [ ] Add uid-format unit tests (param rename → stable Python id; `process(int)` vs `process(String)` distinct Java ids).
 

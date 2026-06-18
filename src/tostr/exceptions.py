@@ -9,3 +9,7 @@ class APIKeyError(TostrError):
 
 class DatabaseNotFoundError(TostrError):
     pass
+
+class CacheFormatError(TostrError):
+    """The on-disk cache format is incompatible with this build (see core.cache_version)."""
+    pass

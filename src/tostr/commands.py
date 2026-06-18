@@ -14,7 +14,8 @@ from tostr.core import Registry, tost, InspectResult, SkeletonResult, SearchResu
 from tostr.core.context.config import ProjectConfig
 from tostr.core.providers import LanguageProvider
 
-from tostr.exceptions import APIKeyError, DatabaseNotFoundError
+from tostr.core.cache_version import incompatibility_reason, read_db_version
+from tostr.exceptions import APIKeyError, DatabaseNotFoundError, CacheFormatError
 
 def _verify_db_exists(target_path: Path):
     """Ensure an initialized Tostr database exists for the given project path.
@@ -28,6 +29,12 @@ def _verify_db_exists(target_path: Path):
     if not db_path.exists():
         raise DatabaseNotFoundError(
             f"No Tostr database found at {db_path}. Run 'tostr init' first."
+        )
+    reason = incompatibility_reason(read_db_version(db_path))
+    if reason:
+        raise CacheFormatError(
+            f"Tostr cache at {db_path} is incompatible with this version ({reason}). "
+            f"Run 'tostr init' to rebuild it."
         )
 
 def get_llm_client(progress_tracker: "ProgressTracker" = None):
@@ -128,6 +135,14 @@ async def init_async(target_path: Path, use_cache: bool = True, language: str = 
     # Ensure .tostr directory exists
     tostr_dir = target_path / ".tostr"
     tostr_dir.mkdir(exist_ok=True)
+
+    # If an existing cache is from an incompatible format, wipe it so we rebuild fresh and re-stamp
+    # the current version — otherwise INSERT OR REPLACE would leave a mixed-format graph behind.
+    db_path = tostr_dir / "cache.db"
+    if db_path.exists() and incompatibility_reason(read_db_version(db_path)):
+        logger.warning("Existing cache is an incompatible format; wiping it for a clean rebuild.")
+        for p in (db_path, db_path.with_name("cache.db-wal"), db_path.with_name("cache.db-shm")):
+            p.unlink(missing_ok=True)
 
     # Save language to config.toml
     config_path = tostr_dir / "config.toml"
