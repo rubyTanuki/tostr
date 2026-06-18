@@ -1,6 +1,9 @@
 # Failproofing the Incremental AST Updater
 
-**Status:** in progress (started 2026-06-16)
+**Status:** core complete (2026-06-16 → 2026-06-17). Phases 0–3, 6, 7 done; Phase 4 resolved as drop-and-heal
+(no build); Phase 5 cut; Phase 8 deferred. 57 tests passing incl `--integration`. Remaining open items are
+non-blocking: UID-format DB migration/re-init enforcement (Phase 1 tail) and Java FQN expansion (accepted as
+package-strip). Watcher incremental updates are now diff-correct, deletion-safe, cost-efficient, and race-safe.
 **Owner:** Avery
 **Why this matters:** the save-time incremental update loop is Tostr's core moat vs graphify. It must be ironclad — after *any* sequence of edits, the cached graph must be indistinguishable from a full re-parse.
 
@@ -197,24 +200,43 @@ vector path; description reuse rides the same `diff_hash` gate.) Full suite 53 p
 
 ---
 
-## Phase 7 — Concurrency hardening
+## Phase 7 — Concurrency hardening  ✅ done (2026-06-17)
 
-- [ ] Serialize DB writes (single-writer queue) so a cancelled-but-in-flight `asyncio.to_thread` write
-      can't land *after* its replacement and resurrect stale data.
-- [ ] Guard each write to confirm the task is still the active one for its path before committing.
+- [x] Single-writer lock: `watch_async` creates one `asyncio.Lock` (bound to the watcher's loop) and passes
+      it to `process_single_file` / `process_file_deletion`. All DB-mutating calls route through
+      `_guarded_write`, which holds the lock across the `to_thread` write — serializing the per-file write
+      pipelines so a cancelled-but-in-flight thread write can't interleave with or land after its replacement,
+      and incidentally avoiding SQLite "database is locked" from parallel writers.
+- [x] Epoch guard: inside the lock, `_guarded_write` re-checks `active_tasks[filepath] is current_task()` and
+      skips the write if a newer change has superseded this task. Combined with the FIFO lock this guarantees
+      the last change's data is the last write. Direct callers/tests pass `write_lock=None` → ungated (they
+      await each call to completion, so there's nothing to race).
 
-**Exit / tests:** rapid successive saves of one file; concurrent saves of multiple files; assert final DB == last-write state.
+Why this is sufficient (given the pipeline shape): `parse_path`/`resolve_dependencies` are synchronous, so a
+superseded task raises `CancelledError` at its next `await` and never reaches later writes; the only escapee is
+a write already executing in a thread, and the lock + epoch check neutralize that (it either already held the
+lock as the then-current task — and the newer task writes after it — or it skips on the epoch check).
+
+**Exit / tests:** ✅ `tests/test_guarded_write.py` (4 fast non-integration unit tests): runs when current,
+skips when superseded, runs lock-less for direct callers, and serializes concurrent writers (observed overlap
+== 1). Full suite 57 passed.
 
 ---
 
-## Phase 8 — Verification & guardrails
+## Phase 8 — Verification & guardrails  ⏸️ deferred (2026-06-17, Avery's call)
 
-- [ ] Add an **integrity checker** (the 5 invariants above) usable as a test assertion; consider exposing
-      it as `tostr doctor`.
-- [ ] **Golden-equivalence fuzz test**: random edit sequences; diff incremental DB vs full-reparse DB.
-- [ ] Run on a real open-source project; verify no orphans after a live editing session.
+Heavy verification harness deemed unnecessary for now. The core safety net already exists: every watcher
+integration test calls `assert_graph_integrity` (no dangling edges, no orphan vectors), which is the practical
+form of the integrity invariants and already guards the add/modify/remove/rename/delete/cascade paths.
 
-**Exit:** golden-equivalence test passes over many random seeds; integrity checker clean on a real project.
+Dropped/deferred unless a regression motivates them:
+- `tostr doctor` CLI surface for the integrity check — cheap to add later if users need to self-diagnose a graph.
+- Golden-equivalence fuzz harness (random edit sequences; diff incremental DB vs full-reparse DB) — strongest
+  possible proof, but high effort/maintenance; the targeted per-feature tests cover the known failure modes.
+- Real-project live-edit soak test.
+
+(If the future reindex/healing work from Phase 4's notes lands, this is where its "full reindex == fresh init"
+property would get a test.)
 
 ---
 

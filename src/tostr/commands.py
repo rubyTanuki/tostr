@@ -209,6 +209,11 @@ async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
         logger.warning("No API key found; watcher running in no-LLM mode (embeddings only, descriptions skipped).")
     config = ProjectConfig(target_path)
 
+    # Single-writer lock for all DB mutations from this watcher. Created here so it binds to this
+    # loop, and serializes the per-file write pipelines so a cancelled-but-in-flight thread write
+    # can't interleave with (or land after) its replacement. Passed into the task coroutines.
+    write_lock = asyncio.Lock()
+
     logger.info("Starting Listener")
     try:
         async for changes in awatch(target_path, stop_event=stop_event):
@@ -231,17 +236,17 @@ async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
                     case Change.deleted:
                         logger.info(f"File deleted: {display_path}")
                         new_task = asyncio.create_task(
-                            process_file_deletion(target_path, abs_path)
+                            process_file_deletion(target_path, abs_path, write_lock=write_lock)
                         )
                     case Change.added:
                         logger.info(f"File added: {display_path}")
                         new_task = asyncio.create_task(
-                            process_single_file(target_path, abs_path, llm)
+                            process_single_file(target_path, abs_path, llm, write_lock=write_lock)
                         )
                     case _:  # Change.modified
                         logger.info(f"File modified: {display_path}")
                         new_task = asyncio.create_task(
-                            process_single_file(target_path, abs_path, llm)
+                            process_single_file(target_path, abs_path, llm, write_lock=write_lock)
                         )
 
                 active_tasks[abs_path] = new_task
@@ -286,7 +291,22 @@ async def search_async(query: str, project_path: Path, filter_type: str = None, 
                 
         return results
 
-async def process_file_deletion(project_dir: Path, filepath: Path):
+async def _guarded_write(write_lock: "asyncio.Lock | None", filepath: Path, fn, *args, **kwargs):
+    """Run a DB-mutating call off-loop, serialized behind `write_lock` when one is supplied
+    (watcher mode). Inside the lock we re-check that this task is still the live task for `filepath`
+    and skip the write if it's been superseded by a newer change — so a cancelled-but-in-flight
+    pipeline can't clobber the result of the change that replaced it. When `write_lock` is None
+    (direct callers / tests, which await each call to completion) we just run the write."""
+    if write_lock is None:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    async with write_lock:
+        if active_tasks.get(filepath) is not asyncio.current_task():
+            logger.debug(f"Skipping superseded DB write for {filepath}")
+            return None
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+async def process_file_deletion(project_dir: Path, filepath: Path, write_lock: "asyncio.Lock | None" = None):
     """Watcher deletion path: purge a removed file (or directory) and everything beneath it from
     the cache, so no ghost structs/edges/vectors linger. The path is relativized the same way the
     builders store it; `delete_path_subtree` cascades for directories via a path-prefix match."""
@@ -295,8 +315,8 @@ async def process_file_deletion(project_dir: Path, filepath: Path):
         db = SQLiteCache(project_dir / ".tostr" / "cache.db")
         registry = Registry(db=db, use_cache=True, project_path=project_dir)
         rel_path = str(registry.relative_to_project(Path(filepath)))
-        removed = await asyncio.to_thread(registry.delete_path_subtree, rel_path)
-        logger.debug(f"✅ Deleted {len(removed)} struct(s) for {rel_path}")
+        removed = await _guarded_write(write_lock, filepath, registry.delete_path_subtree, rel_path)
+        logger.debug(f"✅ Deleted {len(removed or [])} struct(s) for {rel_path}")
     except asyncio.CancelledError:
         logger.warning(f"Deletion task cancelled on {filepath}")
     except Exception as e:
@@ -306,15 +326,15 @@ async def process_file_deletion(project_dir: Path, filepath: Path):
             del active_tasks[filepath]
 
 
-async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient):
+async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient, write_lock: "asyncio.Lock | None" = None):
     logger.info(f"Processing file {filepath}")
     try:
         db = SQLiteCache(project_dir / ".tostr" / "cache.db")
-        
+
         registry = Registry(db=db, use_cache=True, project_path=project_dir)
         embedder = get_cached_embedding_client()
         parser = BaseParser(filepath, llm=llm_client, embedder=embedder, registry=registry)
-        
+
         parser.parse_path(filepath)
 
         # Nothing parsed (unsupported/ignored file) — don't prune, or we'd wipe the path's structs.
@@ -333,16 +353,16 @@ async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLM
         # the stale write doesn't blank carried-over descriptions).
         await asyncio.to_thread(registry.carry_over_unchanged, prune_paths[0])
 
-        await asyncio.to_thread(registry.save_to_cache, stale=True, prune_paths=prune_paths)
+        await _guarded_write(write_lock, filepath, registry.save_to_cache, stale=True, prune_paths=prune_paths)
         logger.debug("Wrote Cache w/ stale descriptions")
 
         # resolve the descriptions and do the second cache write
         await parser.resolve_descriptions_async()
-        await asyncio.to_thread(registry.save_to_cache, prune_paths=prune_paths)
+        await _guarded_write(write_lock, filepath, registry.save_to_cache, prune_paths=prune_paths)
         logger.debug("Wrote Cache w/ resolved descriptions")
-        
+
         logger.debug(f"✅ Processed file {filepath}")
-        
+
     except asyncio.CancelledError:
         logger.warning(f"Task cancelled on {filepath}")
     except Exception as e:
