@@ -105,11 +105,24 @@ Phase 8 integrity checker. Full suite: 50 passed (incl. `--integration`).
 `watch_async` logs `Change.deleted` but still routes it through `process_single_file`, which throws on the
 missing file and removes nothing.
 
-- [ ] Route `Change.deleted` to a dedicated DB-removal path (delete the file's whole subtree + edges + vectors).
-- [ ] Handle rename/move = `deleted(old) + added(new)`; ensure ordering is robust (added reparses, deleted purges).
-- [ ] Decide directory-deletion behavior (cascade purge of the subtree).
+- [x] Routed `Change.deleted` in `watch_async` to a dedicated `process_file_deletion` (no longer funneled
+      through `process_single_file`, which used to throw on the missing file and remove nothing).
+- [x] `Registry.delete_path_subtree(path_str)` purges every struct at the path or beneath it
+      (`path = ? OR path LIKE ? || '/%'`), plus edges (both directions) and vectors. Refactored the shared
+      teardown into `_delete_struct_ids` (used by both prune and delete); it also records inbound dependents
+      into `inbound_reresolve_worklist` for Phase 4. (`registry.py`, 2026-06-17)
+- [x] Directory deletion cascades via the path-prefix match (one code path handles file *and* dir removal).
+- [x] Rename/move = `deleted(old)+added(new)`: handled by the two independent watcher events
+      (added → `process_single_file`, deleted → `process_file_deletion`), keyed by distinct paths in `active_tasks`.
 
-**Exit / tests:** delete-file and rename-file cases; assert full subtree purge and no dangling inbound edges.
+**Exit / tests:** ✅ 2 new integration tests — `test_deleted_file_is_purged` (subtree gone, vectors gone,
+cross-file caller edge into the deleted file not dangling) and `test_directory_deletion_cascades` (whole
+`services/` subtree purged). Full suite 52 passed (incl `--integration`).
+
+**Incidental fix:** `EmbeddingClient.queue` is now created in `start()` instead of `__init__`. The client is
+a process-wide `lru_cache` singleton, so a queue built at construction stayed bound to the first event loop
+and raised "bound to a different event loop" on later runs under a fresh loop (each watcher reparse / per-test
+loops). Pre-existing latent bug; surfaced once enough embedder-using tests ran in one process.
 
 ---
 

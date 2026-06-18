@@ -228,17 +228,22 @@ async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
                     existing_task.cancel()
 
                 match change_type:
-                    case Change.modified:
-                        logger.info(f"File modified: {display_path}")
-                    case Change.added:
-                        logger.info(f"File added: {display_path}")
                     case Change.deleted:
                         logger.info(f"File deleted: {display_path}")
-                        # TODO: handle deletions in the db
+                        new_task = asyncio.create_task(
+                            process_file_deletion(target_path, abs_path)
+                        )
+                    case Change.added:
+                        logger.info(f"File added: {display_path}")
+                        new_task = asyncio.create_task(
+                            process_single_file(target_path, abs_path, llm)
+                        )
+                    case _:  # Change.modified
+                        logger.info(f"File modified: {display_path}")
+                        new_task = asyncio.create_task(
+                            process_single_file(target_path, abs_path, llm)
+                        )
 
-                new_task = asyncio.create_task(
-                    process_single_file(target_path, abs_path, llm)
-                )
                 active_tasks[abs_path] = new_task
 
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -280,6 +285,26 @@ async def search_async(query: str, project_path: Path, filter_type: str = None, 
                 break
                 
         return results
+
+async def process_file_deletion(project_dir: Path, filepath: Path):
+    """Watcher deletion path: purge a removed file (or directory) and everything beneath it from
+    the cache, so no ghost structs/edges/vectors linger. The path is relativized the same way the
+    builders store it; `delete_path_subtree` cascades for directories via a path-prefix match."""
+    logger.info(f"Processing deletion {filepath}")
+    try:
+        db = SQLiteCache(project_dir / ".tostr" / "cache.db")
+        registry = Registry(db=db, use_cache=True, project_path=project_dir)
+        rel_path = str(registry.relative_to_project(Path(filepath)))
+        removed = await asyncio.to_thread(registry.delete_path_subtree, rel_path)
+        logger.debug(f"✅ Deleted {len(removed)} struct(s) for {rel_path}")
+    except asyncio.CancelledError:
+        logger.warning(f"Deletion task cancelled on {filepath}")
+    except Exception as e:
+        logger.warning(f"Error deleting {filepath}: {e}")
+    finally:
+        if active_tasks.get(filepath) == asyncio.current_task():
+            del active_tasks[filepath]
+
 
 async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient):
     logger.info(f"Processing file {filepath}")

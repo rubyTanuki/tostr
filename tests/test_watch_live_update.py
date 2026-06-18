@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 import tostr.commands as commands
-from tostr.commands import init_async, process_single_file, watch_async
+from tostr.commands import init_async, process_single_file, process_file_deletion, watch_async
 from tostr.core.db import SQLiteCache
 from tostr.exceptions import APIKeyError
 
@@ -199,6 +199,42 @@ async def test_removing_depended_on_class_cleans_cross_file_edges(no_llm, projec
 
     assert not any("models.py#User" in u for u in all_uids(project)), "User subtree not purged"
     assert_graph_integrity(project)  # the key assertion: main.py's edge into User is gone, not dangling
+
+
+# --- Phase 3: deletion handling -------------------------------------------------------------
+
+async def test_deleted_file_is_purged(no_llm, project):
+    """Deleting a file removes its whole subtree and leaves no dangling cross-file edges."""
+    await init_async(project, no_llm=True)
+    assert any(u == "models.py" for u in all_uids(project))
+    # main.py depends on models — that cross-file edge must not dangle after deletion.
+    models_ids = ids_for_uid_substr(project, "models.py")
+    with _db(project).get_connection() as c:
+        edges = c.execute("SELECT source_id, target_id FROM edges WHERE edge_type LIKE 'depends_on%'").fetchall()
+    assert any(str(t) in models_ids and str(s) not in models_ids for s, t in edges), \
+        "expected a cross-file dependency into models.py before deletion"
+
+    (project / "models.py").unlink()
+    await process_file_deletion(project, (project / "models.py").resolve())
+
+    assert not any("models.py" in u for u in all_uids(project)), "deleted file's structs not purged"
+    assert not (models_ids & vector_ids(project)), "deleted file's vectors left behind"
+    assert_graph_integrity(project)
+
+
+async def test_directory_deletion_cascades(no_llm, project):
+    """Deleting a directory purges every struct beneath it, not just the directory node."""
+    await init_async(project, no_llm=True)
+    assert any(u.startswith("services/") for u in all_uids(project)), "services subtree should exist"
+    services_ids = ids_for_uid_substr(project, "services")
+
+    shutil.rmtree(project / "services")
+    await process_file_deletion(project, (project / "services").resolve())
+
+    leftover = [u for u in all_uids(project) if u == "services" or u.startswith("services/")]
+    assert not leftover, f"directory subtree not fully cascaded: {leftover}"
+    assert not (services_ids & vector_ids(project)), "deleted subtree's vectors left behind"
+    assert_graph_integrity(project)
 
 
 async def test_watcher_live_updates_on_modification(no_llm, project):

@@ -418,22 +418,18 @@ class Registry:
         with self.db.get_connection() as conn:
             return conn.execute("SELECT 1 FROM structs WHERE uid = ? LIMIT 1", (uid,)).fetchone() is not None
 
-    def _prune_file_path(self, conn, path_str: str, kept_ids: Set[str]) -> Set[str]:
-        """Delete structs stored under `path_str` whose id is no longer present in `kept_ids`
-        (i.e. members removed/renamed out of the file on this reparse), along with their edges
-        (both directions) and vectors. Returns the set of removed ids.
-
-        Before deleting, records the *dependents* of the removed structs (callers whose
-        depends_on[/fuzzy] edges pointed at them) into `inbound_reresolve_worklist` so a later
-        pass can re-resolve or drop those edges — they would otherwise be silently lost here."""
-        cur = conn.cursor()
-        stored = {str(r[0]) for r in cur.execute("SELECT id FROM structs WHERE path = ?", (path_str,)).fetchall()}
-        removed = stored - kept_ids
-        if not removed:
+    def _delete_struct_ids(self, conn, ids: Set[str]) -> Set[str]:
+        """Hard-delete the given struct ids and everything attached to them — edges (both
+        directions) and vectors. Before deleting, records the *dependents* of these structs
+        (callers whose depends_on[/fuzzy] edges point at them) into `inbound_reresolve_worklist`
+        so a later pass can re-resolve or drop those now-broken edges; they would otherwise be
+        silently lost here. Operates on the caller's connection (no commit). Returns the ids."""
+        ids = {str(i) for i in ids}
+        if not ids:
             return set()
-
-        ph = ",".join("?" * len(removed))
-        rp = list(removed)
+        cur = conn.cursor()
+        ph = ",".join("?" * len(ids))
+        rp = list(ids)
         dependents = {
             str(r[0]) for r in cur.execute(
                 f"SELECT DISTINCT source_id FROM edges WHERE target_id IN ({ph}) AND edge_type LIKE 'depends_on%'",
@@ -441,16 +437,41 @@ class Registry:
             ).fetchall()
         }
         # Don't ask a struct that's itself being removed to re-resolve.
-        self.inbound_reresolve_worklist |= (dependents - removed)
+        self.inbound_reresolve_worklist |= (dependents - ids)
 
         cur.execute(f"DELETE FROM structs WHERE id IN ({ph})", rp)
         cur.execute(f"DELETE FROM edges WHERE source_id IN ({ph})", rp)
         cur.execute(f"DELETE FROM edges WHERE target_id IN ({ph})", rp)
         cur.execute(f"DELETE FROM vec_structs WHERE struct_id IN ({ph})", rp)
-        logger.debug(
-            f"Pruned {len(removed)} removed struct(s) under '{path_str}'; "
-            f"flagged {len(dependents - removed)} dependent(s) for re-resolution"
-        )
+        return ids
+
+    def _prune_file_path(self, conn, path_str: str, kept_ids: Set[str]) -> Set[str]:
+        """Delete structs stored under `path_str` whose id is no longer present in `kept_ids`
+        (i.e. members removed/renamed out of the file on this reparse). Returns the removed ids."""
+        cur = conn.cursor()
+        stored = {str(r[0]) for r in cur.execute("SELECT id FROM structs WHERE path = ?", (path_str,)).fetchall()}
+        removed = stored - kept_ids
+        if removed:
+            self._delete_struct_ids(conn, removed)
+            logger.debug(f"Pruned {len(removed)} removed struct(s) under '{path_str}'")
+        return removed
+
+    def delete_path_subtree(self, path_str: str) -> Set[str]:
+        """Remove a deleted file or directory from the cache entirely: every struct at `path_str`
+        or beneath it (the `path LIKE '<dir>/%'` clause cascades a directory; for a single file it
+        matches only that file's own structs), plus their edges and vectors. Used by the watcher's
+        deletion path. Returns the removed ids."""
+        if not self.db:
+            raise RuntimeError("SqLiteCache not provided.")
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id FROM structs WHERE path = ? OR path LIKE ? || '/%'",
+                (path_str, path_str),
+            ).fetchall()
+            removed = self._delete_struct_ids(conn, {str(r[0]) for r in rows})
+            conn.commit()
+        if removed:
+            logger.info(f"Deleted {len(removed)} struct(s) under '{path_str}' (file/dir removal)")
         return removed
 
     def save_to_cache(self, stale: bool = False, prune_paths: Optional[List[str]] = None):

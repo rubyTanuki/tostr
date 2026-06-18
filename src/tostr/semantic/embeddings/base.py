@@ -29,7 +29,14 @@ class EmbeddingClient:
         self._worker_task = None
 
     def start(self):
-        """Starts the background consumer loop."""
+        """Starts the background consumer loop.
+
+        The queue is (re)created here rather than in __init__ so it binds to the event loop that
+        actually runs this parse cycle. The client is a process-wide cached singleton, so a queue
+        created once at construction would stay bound to the first loop that touched it and raise
+        'bound to a different event loop' on any later run under a fresh loop (e.g. each watcher
+        reparse, or per-test event loops). Recreating per start() keeps it loop-local."""
+        self.queue = asyncio.Queue()
         self._worker_task = asyncio.create_task(self._process_queue())
 
     def enqueue(self, struct: "BaseStruct"):
