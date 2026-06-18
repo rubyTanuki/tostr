@@ -78,17 +78,25 @@ Today `save_to_cache` only `INSERT OR REPLACE`s parsed structs and deletes edges
 removed members and their edges/vectors leak forever. Single-file reparse also drops the file's
 parent-directory edge.
 
-- [ ] New `sync_file_to_cache` (or extend `save_to_cache`): compute the set of ids currently stored for
-      this file's subtree (`WHERE path = ? OR path LIKE ?/%`), subtract freshly-parsed ids, and `DELETE`
-      the leftovers from `structs`, `edges` (**both** `source_id` and `target_id`), and `vec_structs`.
-- [ ] Fix **parent-directory detachment**: `parser.parse_path` single-file branch must attach the file to
-      its real parent `Directory` (resolve/create it) so the `is_child_of` edge is re-emitted.
-- [ ] Capture the set of ids that *changed* (old id in removed-set, new struct with same name/receiver) —
-      this is the worklist handed to Phase 4.
+- [x] Extended `save_to_cache(stale, prune_paths=...)` with `_prune_file_path`: after writing the parsed
+      structs, deletes anything stored under the file path but absent from this parse, from `structs`,
+      `edges` (**both** directions), and `vec_structs`. (All structs in a file share `path = str(rel_path)`,
+      so the scope query is just `WHERE path = ?` — no LIKE needed.) Full re-parses pass no `prune_paths`.
+      (`registry.py`, 2026-06-17)
+- [x] Fixed **parent-directory detachment**: `parser._attach_parent_directory` walks the file's ancestor
+      dirs — existing dirs are *stubbed* (edge target id only, never overwritten, so directory descriptions
+      are safe), missing dirs (file saved into a new folder) are created+persisted with their own parent edge.
+- [x] Capture the re-resolution worklist for Phase 4: `_prune_file_path` records dependents
+      (`source_id` of `depends_on%` edges into removed structs) into `registry.inbound_reresolve_worklist`
+      *before* deleting those edges. Phase 4 consumes this set.
+- [x] `process_single_file` guards against pruning when nothing parsed (`registry.root is None`) so an
+      unsupported/empty parse can't wipe a path; passes `prune_paths=[rel_file_path]` on both writes.
 
-**Exit / tests:** extend `tests/test_watch_live_update.py` — remove-method, rename-method, change-signature;
-assert the old struct row, its edges (both directions), and its vector are gone; assert the file still has
-its `is_child_of` parent edge after update.
+**Exit / tests:** ✅ `tests/test_watch_live_update.py` extended (4 new integration tests): removed-method
+purge (struct+vector+edges), renamed-method drops old identity, file keeps its parent `is_child_of` edge
+after update, and removing a depended-on class cleans the cross-file caller edge (no dangling). Added a
+reusable `assert_graph_integrity` helper (no dangling edges, no orphan vectors) — an early seed of the
+Phase 8 integrity checker. Full suite: 50 passed (incl. `--integration`).
 
 ---
 

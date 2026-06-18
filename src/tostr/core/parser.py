@@ -76,6 +76,34 @@ class BaseParser(ABC):
             if file:
                 self.registry.root = file
                 self.registry.add_struct(file)
+                self._attach_parent_directory(file)
+
+    def _attach_parent_directory(self, file: BaseFile):
+        """Re-link a singly-parsed file (watcher path) into the directory tree so its is_child_of
+        edge to the parent directory survives the reparse. Without this, save_to_cache deletes the
+        file's old parent edge and never re-adds it, orphaning the file from the project tree.
+
+        Walks from the file's immediate parent up to the project root. Directories that already
+        exist are *stubbed* (the object only supplies the correct id for the edge — we don't persist
+        it, so existing directory rows/descriptions are never clobbered). Directories that don't yet
+        exist (a file saved into a brand-new folder) are created and persisted so the edge target is
+        real, with their own parent edge linked in turn."""
+        if not self.registry or file.path is None:
+            return
+        child = file
+        parent_path = Path(file.path).parent
+        while True:
+            dir_uid = str(parent_path)
+            directory = Directory(path=parent_path, registry=self.registry, uid=dir_uid)
+            child.set_parent(directory)
+            if self.registry.struct_exists(dir_uid):
+                break  # existing dir: stub only provides the edge target id; don't persist/overwrite
+            # New directory: persist it, then keep walking so its own parent edge is created too.
+            self.registry.add_struct(directory)
+            if dir_uid == ".":
+                break
+            child = directory
+            parent_path = parent_path.parent
 
     def parse_file(self, subpath: Path, parent: BaseStruct=None) -> BaseFile:
         logger.debug(f"Attempting to resolve builder for suffix {subpath.suffix}")

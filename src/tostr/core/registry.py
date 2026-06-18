@@ -24,6 +24,9 @@ class Registry:
         self.use_cache = use_cache
         self.uid_map: Dict[str, BaseStruct] = {}
         self.id_map: Dict[str, BaseStruct] = {}
+        # Dependents (source_ids) whose edges pointed at structs removed during the last prune;
+        # populated by pruning so a later pass can re-resolve them (Phase 4). See save_to_cache.
+        self.inbound_reresolve_worklist: Set[str] = set()
         self.missing_uids: Set[str] = set()
         self.missing_packages: Set[str] = set()
         self._logical_cache: Dict[str, str] = {}
@@ -405,10 +408,59 @@ class Registry:
                 conn.executemany("INSERT INTO edges (source_id, target_id, edge_type) VALUES (?, ?, ?)", edges)
             conn.commit()
 
-    def save_to_cache(self, stale: bool = False):
+    def struct_exists(self, uid: str) -> bool:
+        """Cheap existence check (in-memory first, then DB) — avoids the heavy hydration that
+        get_struct_by_uid performs. Used when re-linking a singly-parsed file to its parent dir."""
+        if uid in self.uid_map:
+            return True
+        if not self.db:
+            return False
+        with self.db.get_connection() as conn:
+            return conn.execute("SELECT 1 FROM structs WHERE uid = ? LIMIT 1", (uid,)).fetchone() is not None
+
+    def _prune_file_path(self, conn, path_str: str, kept_ids: Set[str]) -> Set[str]:
+        """Delete structs stored under `path_str` whose id is no longer present in `kept_ids`
+        (i.e. members removed/renamed out of the file on this reparse), along with their edges
+        (both directions) and vectors. Returns the set of removed ids.
+
+        Before deleting, records the *dependents* of the removed structs (callers whose
+        depends_on[/fuzzy] edges pointed at them) into `inbound_reresolve_worklist` so a later
+        pass can re-resolve or drop those edges — they would otherwise be silently lost here."""
+        cur = conn.cursor()
+        stored = {str(r[0]) for r in cur.execute("SELECT id FROM structs WHERE path = ?", (path_str,)).fetchall()}
+        removed = stored - kept_ids
+        if not removed:
+            return set()
+
+        ph = ",".join("?" * len(removed))
+        rp = list(removed)
+        dependents = {
+            str(r[0]) for r in cur.execute(
+                f"SELECT DISTINCT source_id FROM edges WHERE target_id IN ({ph}) AND edge_type LIKE 'depends_on%'",
+                rp,
+            ).fetchall()
+        }
+        # Don't ask a struct that's itself being removed to re-resolve.
+        self.inbound_reresolve_worklist |= (dependents - removed)
+
+        cur.execute(f"DELETE FROM structs WHERE id IN ({ph})", rp)
+        cur.execute(f"DELETE FROM edges WHERE source_id IN ({ph})", rp)
+        cur.execute(f"DELETE FROM edges WHERE target_id IN ({ph})", rp)
+        cur.execute(f"DELETE FROM vec_structs WHERE struct_id IN ({ph})", rp)
+        logger.debug(
+            f"Pruned {len(removed)} removed struct(s) under '{path_str}'; "
+            f"flagged {len(dependents - removed)} dependent(s) for re-resolution"
+        )
+        return removed
+
+    def save_to_cache(self, stale: bool = False, prune_paths: Optional[List[str]] = None):
+        """Persist the in-memory structs. When `prune_paths` is given (the relative file path(s)
+        being reparsed by the watcher), any struct previously stored under those paths but absent
+        from this parse is deleted — this is what keeps incremental updates from leaking ghosts
+        when a member is removed or renamed. Full re-parses pass no prune_paths."""
         if not self.db:
             raise RuntimeError("SqLiteCache not provided.")
-        
+
         parsed_ids = [(node.id,) for node in self.uid_map.values()]
         grouped_nodes = defaultdict(list)
         all_edges = set()
@@ -452,5 +504,12 @@ class Registry:
                 # so we manually delete to avoid duplicates before inserting.
                 conn.executemany("DELETE FROM vec_structs WHERE struct_id = ?", [(v[0],) for v in vectors])
                 conn.executemany("INSERT INTO vec_structs (struct_id, vector) VALUES (?, ?)", vectors)
-                
+
+            # Diff-prune: now that the freshly-parsed structs are written, remove anything that used
+            # to live under these paths but is gone from this parse (deleted/renamed members).
+            if prune_paths:
+                kept_ids = {node.id for node in self.uid_map.values()}
+                for path_str in prune_paths:
+                    self._prune_file_path(conn, path_str, kept_ids)
+
             conn.commit()

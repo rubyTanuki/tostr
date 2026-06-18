@@ -16,6 +16,7 @@ import pytest
 
 import tostr.commands as commands
 from tostr.commands import init_async, process_single_file, watch_async
+from tostr.core.db import SQLiteCache
 from tostr.exceptions import APIKeyError
 
 # Whole module is integration: it runs a real init (downloads/loads the embedding
@@ -77,6 +78,127 @@ async def test_process_single_file_updates_tree(no_llm, project):
     # Existing structs are retained and not duplicated.
     assert sum("apply_discount" in m for m in after) == 1
     assert len(after) == len(set(after)), "duplicate structs written on update"
+
+
+# --- Phase 2: diff-based cache sync (orphan purge + tree-attachment) -------------------------
+
+def _db(proj: Path) -> SQLiteCache:
+    return SQLiteCache(proj / ".tostr" / "cache.db")
+
+
+def all_uids(proj: Path) -> list[str]:
+    with _db(proj).get_connection() as c:
+        return [r[0] for r in c.execute("SELECT uid FROM structs").fetchall()]
+
+
+def ids_for_uid_substr(proj: Path, substr: str) -> set[str]:
+    with _db(proj).get_connection() as c:
+        return {str(r[0]) for r in c.execute("SELECT id, uid FROM structs").fetchall() if substr in r[1]}
+
+
+def vector_ids(proj: Path) -> set[str]:
+    with _db(proj).get_connection() as c:
+        return {str(r[0]) for r in c.execute("SELECT struct_id FROM vec_structs").fetchall()}
+
+
+def assert_graph_integrity(proj: Path) -> None:
+    """The Phase 2 guarantee: no dangling edges and no orphan vectors anywhere in the DB."""
+    with _db(proj).get_connection() as c:
+        ids = {str(r[0]) for r in c.execute("SELECT id FROM structs").fetchall()}
+        edges = [(str(s), str(t), e) for s, t, e in c.execute("SELECT source_id, target_id, edge_type FROM edges").fetchall()]
+        vec_ids = {str(r[0]) for r in c.execute("SELECT struct_id FROM vec_structs").fetchall()}
+    dangling = [e for e in edges if e[0] not in ids or e[1] not in ids]
+    orphan_vecs = vec_ids - ids
+    assert not dangling, f"dangling edges reference missing structs: {dangling}"
+    assert not orphan_vecs, f"orphan vectors reference missing structs: {orphan_vecs}"
+
+
+def remove_apply_discount(proj: Path) -> None:
+    models = proj / "models.py"
+    block = (
+        "    def apply_discount(self, rate: float) -> float:\n"
+        "        return self.price * (1 - rate)"
+    )
+    text = models.read_text()
+    assert block in text
+    models.write_text(text.replace(block, "        pass"))
+
+
+async def test_removed_method_is_purged(no_llm, project):
+    """Removing a member deletes its struct row, its vector, and any edge touching it — no ghost."""
+    await init_async(project, no_llm=True)
+
+    old_ids = ids_for_uid_substr(project, "apply_discount")
+    assert old_ids, "fixture should have apply_discount before edit"
+    assert old_ids & vector_ids(project), "method should have a vector before removal"
+
+    remove_apply_discount(project)
+    await process_single_file(project, (project / "models.py").resolve(), None)
+
+    assert not any("apply_discount" in u for u in all_uids(project)), "removed method still in structs"
+    assert not (old_ids & vector_ids(project)), "removed method's vector was left behind"
+    assert_graph_integrity(project)
+
+
+async def test_renamed_method_drops_old_identity(no_llm, project):
+    """Renaming a method (new uid -> new id) purges the old identity rather than orphaning it."""
+    await init_async(project, no_llm=True)
+    old_ids = ids_for_uid_substr(project, "apply_discount")
+    assert old_ids
+
+    models = project / "models.py"
+    models.write_text(models.read_text().replace("apply_discount", "apply_markdown"))
+    await process_single_file(project, models.resolve(), None)
+
+    uids = all_uids(project)
+    assert not any("apply_discount" in u for u in uids), "old method identity not purged on rename"
+    assert any("apply_markdown" in u for u in uids), "renamed method missing"
+    assert not (old_ids & vector_ids(project)), "old method's vector survived the rename"
+    assert_graph_integrity(project)
+
+
+async def test_file_keeps_parent_edge_after_update(no_llm, project):
+    """A reparsed file must stay attached to its parent directory (is_child_of edge survives)."""
+    await init_async(project, no_llm=True)
+
+    def parent_edge():
+        with _db(project).get_connection() as c:
+            fid = c.execute("SELECT id FROM structs WHERE uid = 'models.py'").fetchone()[0]
+            row = c.execute(
+                "SELECT target_id FROM edges WHERE source_id = ? AND edge_type = 'is_child_of'", (fid,)
+            ).fetchone()
+        return row[0] if row else None
+
+    before = parent_edge()
+    assert before is not None, "file should be attached to its directory after init"
+
+    add_method(project)
+    await process_single_file(project, (project / "models.py").resolve(), None)
+
+    after = parent_edge()
+    assert after == before, "file detached from (or re-pointed away from) its parent directory on update"
+    assert_graph_integrity(project)
+
+
+async def test_removing_depended_on_class_cleans_cross_file_edges(no_llm, project):
+    """Removing a class that another file depends on must not leave the caller's edge dangling."""
+    await init_async(project, no_llm=True)
+
+    user_ids = ids_for_uid_substr(project, "models.py#User")
+    assert user_ids, "User subtree should exist after init"
+    with _db(project).get_connection() as c:
+        edges = c.execute("SELECT source_id, target_id FROM edges WHERE edge_type LIKE 'depends_on%'").fetchall()
+    inbound = [(str(s), str(t)) for s, t in edges if str(t) in user_ids and str(s) not in user_ids]
+    assert inbound, "expected a cross-file dependency edge into the User subtree (e.g. from main.py)"
+
+    models = project / "models.py"
+    # Drop the entire User class, keep Product.
+    new_src = models.read_text().split("class Product:", 1)[1]
+    models.write_text("class Product:" + new_src)
+    await process_single_file(project, models.resolve(), None)
+
+    assert not any("models.py#User" in u for u in all_uids(project)), "User subtree not purged"
+    assert_graph_integrity(project)  # the key assertion: main.py's edge into User is gone, not dangling
 
 
 async def test_watcher_live_updates_on_modification(no_llm, project):

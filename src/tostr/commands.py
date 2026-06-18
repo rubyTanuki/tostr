@@ -291,15 +291,24 @@ async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLM
         parser = BaseParser(filepath, llm=llm_client, embedder=embedder, registry=registry)
         
         parser.parse_path(filepath)
-        
+
+        # Nothing parsed (unsupported/ignored file) — don't prune, or we'd wipe the path's structs.
+        if registry.root is None:
+            logger.debug(f"No parseable struct produced for {filepath}; skipping cache write")
+            return
+
         parser.resolve_dependencies()
-        
-        await asyncio.to_thread(registry.save_to_cache, stale=True)
+
+        # Scope the diff-prune to exactly this file's relative path so removed/renamed members are
+        # purged. Matches what the builders store (BaseFileBuilder.from_path relativizes the path).
+        prune_paths = [str(registry.relative_to_project(Path(filepath)))]
+
+        await asyncio.to_thread(registry.save_to_cache, stale=True, prune_paths=prune_paths)
         logger.debug("Wrote Cache w/ stale descriptions")
 
         # resolve the descriptions and do the second cache write
         await parser.resolve_descriptions_async()
-        await asyncio.to_thread(registry.save_to_cache)
+        await asyncio.to_thread(registry.save_to_cache, prune_paths=prune_paths)
         logger.debug("Wrote Cache w/ resolved descriptions")
         
         logger.debug(f"✅ Processed file {filepath}")
