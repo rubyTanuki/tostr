@@ -237,6 +237,43 @@ async def test_directory_deletion_cascades(no_llm, project):
     assert_graph_integrity(project)
 
 
+# --- Phase 6: description/vector carry-over for unchanged members ----------------------------
+
+async def test_unchanged_members_are_not_regenerated(no_llm, project, monkeypatch):
+    """Editing one method regenerates only what changed; untouched siblings reuse cached artifacts.
+
+    Asserted via the embedder (in no-LLM mode the vector is the regenerated artifact; the same
+    diff_hash gate governs description reuse). Embed texts are `"{uid}: {body}"`, so we recover
+    which uids were embedded.
+    """
+    await init_async(project, no_llm=True)
+
+    embedder = commands.get_cached_embedding_client()
+    embedded: list[str] = []
+    original_embed_batch = embedder.strategy.embed_batch
+
+    def spy(descriptions):
+        embedded.extend(descriptions)
+        return original_embed_batch(descriptions)
+
+    monkeypatch.setattr(embedder.strategy, "embed_batch", spy)
+
+    # Change ONLY Product.apply_discount's body.
+    models = project / "models.py"
+    models.write_text(models.read_text().replace(
+        "return self.price * (1 - rate)",
+        "return self.price * (1.0 - rate)  # tweaked",
+    ))
+    await process_single_file(project, models.resolve(), None)
+
+    embedded_uids = {t.split(": ", 1)[0] for t in embedded}
+    assert any("apply_discount" in u for u in embedded_uids), "changed method should be re-embedded"
+    # User.get_display_name lives in the same file but is untouched — it must be carried over.
+    assert not any("get_display_name" in u for u in embedded_uids), \
+        "an unchanged sibling method was needlessly re-embedded (carry-over failed)"
+    assert_graph_integrity(project)
+
+
 async def test_watcher_live_updates_on_modification(no_llm, project):
     """End-to-end: the running watcher detects a save and updates the DB itself."""
     await init_async(project, no_llm=True)

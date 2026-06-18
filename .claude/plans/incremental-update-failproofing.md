@@ -165,28 +165,35 @@ dangling edges after the drop.
 
 ---
 
-## Phase 5 — Resolver arity robustness
+## Phase 5 — Resolver arity robustness  ✂️ cut from this plan (2026-06-17)
 
-Exact arity matching already drops legitimate edges for defaults/varargs (independent of incremental).
-
-- [ ] Python: confirm name+receiver matching (arity loose) handles defaults, `*args`/`**kwargs`,
-      argparse-style call sites; add regression tests.
-- [ ] Java: match an arity *range* with varargs (`foo(int...)`), keep type-based overload selection.
-
-**Exit / tests:** `def foo(self, a, b=1)` resolves from both `foo(x)` and `foo(x, y)`; varargs resolves from any arity.
+Re-examined and dropped from failproofing:
+- **Python** already runs `strict_arity = False` (`PythonDependencyResolver.__init__`), so arity is ignored
+  in matching — defaults / `*args` / `**kwargs` / argparse already resolve. Nothing to do.
+- **Java varargs** (`foo(String...)` declared arity 1 vs call-arity N) is the only real gap, but it's a
+  pre-existing *full-init resolution-quality* issue — it exists identically without the watcher and doesn't
+  affect incremental correctness. Moved to the general resolver backlog, out of scope for failproofing.
 
 ---
 
-## Phase 6 — Description carry-over via diff_hash
+## Phase 6 — Description/vector carry-over via diff_hash  ✅ done (2026-06-17)
 
-Leaf-only `diff_hash` (just simplified) now makes this clean. Today every save re-describes the whole file
-via LLM and blanks descriptions in the window between the two cache writes.
+Was fully broken: a watcher reparse builds structs fresh from source (empty description, no vector), so the
+describer regenerated everything and the first `save_to_cache(stale=True)` even blanked good descriptions
+mid-update. The describer was already built to short-circuit (`if struct.description:` skips the LLM,
+`if struct.vector is not None:` skips embedding) — nothing was populating the fresh structs.
 
-- [ ] On reparse, if a struct's `diff_hash` (body hash) matches the stored row, carry over the existing
-      description instead of re-running the LLM.
-- [ ] Fix the two-phase write so existing descriptions are never blanked mid-update.
+- [x] `Registry.carry_over_unchanged(path_str)`: loads stored `diff_hash` + description (from `structs`) and
+      vector (from `vec_structs`, via `_deserialize_float32`) for the file's path; for each freshly-parsed
+      struct whose `diff_hash` matches, reuses the cached description + vector. Leaf method hash = its body;
+      class/file hash covers nested text — so an edited method forces its class + file to regenerate while
+      untouched siblings (and unrelated classes in the same file) are carried over. (`registry.py`)
+- [x] Runs in `process_single_file` **before** both writes, so the stale write persists carried descriptions
+      (strips any leftover `[STALE] ` marker) instead of blanking them — fixes the transient-blank window too.
 
-**Exit / tests:** unchanged method keeps its description with **no** LLM call; only changed members re-describe.
+**Exit / tests:** ✅ `test_unchanged_members_are_not_regenerated` — edit one method, spy the embedder: the
+changed method is re-embedded, an untouched sibling (`get_display_name`) is not. (no-LLM mode exercises the
+vector path; description reuse rides the same `diff_hash` gate.) Full suite 53 passed.
 
 ---
 

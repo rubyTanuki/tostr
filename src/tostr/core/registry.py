@@ -17,6 +17,15 @@ if TYPE_CHECKING:
     from tostr.core.models import BaseStruct, BaseCodeStruct
     from tostr.core.utils.progress import ProgressTracker
 
+
+def _deserialize_float32(blob) -> Optional[List[float]]:
+    """Inverse of sqlite_vec.serialize_float32: turn a stored vector blob back into a float list.
+    Local `struct` import avoids shadowing the `struct`/`struct`-named loop vars used elsewhere."""
+    if blob is None:
+        return None
+    import struct as _s
+    return list(_s.unpack(f"{len(blob) // 4}f", blob))
+
 class Registry:
     def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None):
         self.progress_tracker = progress_tracker
@@ -404,6 +413,51 @@ class Registry:
             if edges:
                 conn.executemany("INSERT INTO edges (source_id, target_id, edge_type) VALUES (?, ?, ?)", edges)
             conn.commit()
+
+    def carry_over_unchanged(self, path_str: str) -> int:
+        """Before (re)describing a reparsed file, reuse cached descriptions + vectors for any struct
+        whose body is unchanged (its freshly-computed `diff_hash` matches the stored row). The
+        describer skips LLM generation when `description` is already set, and the embedder skips when
+        `vector` is set — so populating these here means only *changed* or *new* members pay the
+        expensive regeneration cost. A leaf method's hash is its own body; a class/file hash covers
+        all nested text, so an edited method correctly forces its class and file to regenerate while
+        untouched siblings are carried over. Returns the number of structs carried over."""
+        if not self.db:
+            return 0
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, uid, diff_hash, description FROM structs WHERE path = ?", (path_str,)
+            ).fetchall()
+            prev: Dict[str, dict] = {}
+            id_to_uid: Dict[str, str] = {}
+            for r in rows:
+                prev[r["uid"]] = {"diff_hash": r["diff_hash"], "description": r["description"] or "", "vector": None}
+                id_to_uid[str(r["id"])] = r["uid"]
+            if id_to_uid:
+                ph = ",".join("?" * len(id_to_uid))
+                for sid, vec in conn.execute(
+                    f"SELECT struct_id, vector FROM vec_structs WHERE struct_id IN ({ph})", list(id_to_uid)
+                ).fetchall():
+                    uid = id_to_uid.get(str(sid))
+                    if uid:
+                        prev[uid]["vector"] = _deserialize_float32(vec)
+
+        carried = 0
+        for struct in self.uid_map.values():
+            p = prev.get(struct.uid)
+            if not p or not struct.diff_hash or p["diff_hash"] != struct.diff_hash:
+                continue
+            desc = p["description"]
+            if desc.startswith("[STALE] "):  # a prior interrupted update may have left the marker
+                desc = desc[len("[STALE] "):]
+            if desc:
+                struct.description = desc
+            if p["vector"] is not None:
+                struct.vector = p["vector"]
+            carried += 1
+        if carried:
+            logger.debug(f"Carried over {carried} unchanged struct description(s)/vector(s) under '{path_str}'")
+        return carried
 
     def struct_exists(self, uid: str) -> bool:
         """Cheap existence check (in-memory first, then DB) — avoids the heavy hydration that

@@ -328,6 +328,11 @@ async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLM
         # purged. Matches what the builders store (BaseFileBuilder.from_path relativizes the path).
         prune_paths = [str(registry.relative_to_project(Path(filepath)))]
 
+        # Reuse cached descriptions/vectors for members whose body is unchanged, so the describe +
+        # embed pass below only regenerates what actually changed (must run before both writes so
+        # the stale write doesn't blank carried-over descriptions).
+        await asyncio.to_thread(registry.carry_over_unchanged, prune_paths[0])
+
         await asyncio.to_thread(registry.save_to_cache, stale=True, prune_paths=prune_paths)
         logger.debug("Wrote Cache w/ stale descriptions")
 
