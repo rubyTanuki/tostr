@@ -256,7 +256,11 @@ class PythonMethodBuilder(BaseMethodBuilder):
         arity = len(arity_params)
 
         signature_params = f"({', '.join(parameters)})"
-        uid_params = f"({', '.join(uid_parameters)})"
+        # Overload key (see §0 of Creating_New_Language_Parser.md): Python has no overloading,
+        # so a (file, class, name) is already unique. The UID excludes all params — the literal
+        # "(...)" only marks "this is a callable" (distinguishing Class.method(...) from field Class.method)
+        # and keeps `id = md5(uid)` stable across param renames / default / annotation edits.
+        uid_params = "(...)"
 
         # SIGNATURE (retains full type detail for `inspect`)
         signature = f"def {name}{signature_params}"

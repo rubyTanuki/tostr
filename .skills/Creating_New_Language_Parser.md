@@ -14,13 +14,52 @@ Every struct has two distinct identities. Conflating them is the single most dam
 directory-uid := <relative-dir-path>                      e.g. src/app/services
 file-uid      := <relative-file-path>                     e.g. src/app/services/user_service.py
 code-uid      := <file-uid> "#" <code-path>
-code-path     := <name> ("." <name>)* [<pruned-params>]   e.g. UserService.create(self, name: str)
+code-path     := <name> ("." <name>)* [<overload-key>]    e.g. UserService.create(...)
+overload-key  := "(" <disambiguator> ")"                  see the overload-key rule below
 ```
 
-- Top-level class / free function / module field: `<file-uid>#<Name>` → `models.py#User`, `utils.py#clamp(value: float, low: float, high: float)`
-- Nested members chain with dots **after** the `#`: `models.py#User.validate(self)`, `models.py#Outer.Inner.method(x)`
-- Methods append the pruned parameter string so overloads have distinct UIDs.
+- Top-level class / free function / module field: `<file-uid>#<Name>` → `models.py#User`, `utils.py#clamp(...)`
+- Nested members chain with dots **after** the `#`: `models.py#User.validate(...)`, `models.py#Outer.Inner.method(...)`
 - The file UID is set by `BaseFileBuilder.from_path` (the relative path) — do not override it.
+
+#### The overload-key rule (read this carefully — it is the whole identity design)
+
+A method/function UID ends in a parenthetical **overload key**. Its job is to carry **exactly what
+disambiguates two same-named callables in this language, and nothing else** — never parameter names,
+never default values, never annotations, never the return type. Anything that does not change which
+call sites resolve to the symbol must NOT be in the UID.
+
+- **Python (no overloading):** the key is the literal `(...)`. A given `(file, class, name)` has exactly
+  one definition, so no params are needed to disambiguate. → `models.py#Product.apply_discount(...)`.
+- **Java (overloading):** the key is the ordered list of **parameter types**, normalized to a single
+  canonical form → `Service.java#Service.process(int, String)`. Renaming a param or changing the return
+  type leaves the UID stable; changing a param type or the arity changes it (a genuinely different overload).
+  Normalization (`_normalize_java_param_type` in the Java builder): erase generics (`List<String>`→`List`,
+  type erasure means you can't overload on them), varargs→array (`String...`→`String[]`), and **strip the
+  package qualifier down to the simple/inner-class name** (`java.lang.String`→`String`,
+  `com.example.User`→`User`, `java.util.Map.Entry`→`Map.Entry`). Package-stripping (rather than FQN
+  *expansion*) is deliberate: a method is declared once so its UID is always self-consistent; the only thing
+  canonicalization buys is **stability when an author respells a type**, and stripping makes every spelling
+  (`String`/`java.lang.String`, same-package `Order`/`com.example.Order`) agree with **no import map needed**.
+  Accepted limitation: two distinct same-simple-name types from different packages collapse together — only
+  matters under FQN-in-source overloading on identically-named classes, which is vanishingly rare.
+- **Rule of thumb:** if the language has overloading, the key is the canonical param-type list; if not,
+  the key is `(...)`.
+
+Why this matters:
+
+1. **Stable identity under cosmetic edits.** Because `id = md5(uid)`, a UID that excludes resolution-
+   irrelevant detail means a param rename / default change / annotation change does NOT change the `id`.
+   The watcher then updates the body in place and **never has to touch inbound edges**. Encoding param
+   names (as the original Python builder did) orphaned the node and dangled every caller on a trivial edit.
+2. **Field vs callable is visible in the UID.** `Class.data` is a field; `Class.data(...)` is a method.
+   The trailing `(...)` (or `(types)`) makes them distinct UIDs — no exact-match tiebreak needed during
+   prefix hydration.
+3. **The key is deterministic.** Because Python's key is always `(...)`, logical-name → method translation
+   can reconstruct it (`remainder` then `remainder + "(...)"`). Param-name keys could not be reconstructed.
+
+The full signature (param names, types, defaults, return) still lives in the `signature`/`body` **fields**
+for `inspect` and LLM context — it just isn't part of identity.
 
 **The prefix invariant (load-bearing):** every struct's UID begins with its parent's UID. Directory → file → class → method, all the way down. Hydration (`uid LIKE ?%` in `get_struct_by_uid`), skeleton generation, and watcher hash propagation (`WHERE uid = <filepath>`) all depend on it. If a builder breaks this invariant, the symptoms appear far away from the cause: directories that don't show their file children, `skeleton` crashing on file paths, hash updates silently no-oping.
 
@@ -32,7 +71,7 @@ The dotted name that *source code* uses to refer to a struct: `app.services.user
 - `package` is persisted to the DB. Never skip it — watcher-time partial reparses resolve imports against the DB, not memory.
 - `registry.get_struct_by_uid()` accepts both forms: exact UIDs match directly; dotted logical names fall back to package translation. Never hand-construct UIDs from dotted names in resolvers — go through the registry.
 
-Both shipped languages follow this definition. Java derives `package` from the `package` declaration (`com.example`); Python derives it from the file's path relative to the project root (`app.services.user_service`). Either way the code-struct UID is `<file-path>#<Code.path(params)>`, never the dotted name.
+Both shipped languages follow this definition. Java derives `package` from the `package` declaration (`com.example`); Python derives it from the file's path relative to the project root (`app.services.user_service`). Either way the code-struct UID is `<file-path>#<Code.path><overload-key>`, never the dotted name.
 
 ---
 
@@ -177,7 +216,7 @@ elif child.type == "decorated_definition":
   ```
 - Run the `DEPENDENCY_QUERY` on the method node (not the file node) using `QueryCursor.matches()`.
 - Build `dependency_names` as `[(name, arity, receiver, is_creation)]` tuples. For languages like Python where function calls and class instantiation use identical syntax, set `is_creation=False` for all and let the resolver try type resolution as a fallback.
-- UID format (see §0): `"{file_uid}#{name}{parameters_string}"` for free functions, `"{parent_uid}.{name}{parameters_string}"` for methods inside a class — include the parameter string so overloads have distinct UIDs.
+- UID format (see §0 overload-key rule): `"{file_uid}#{name}{overload_key}"` for free functions, `"{parent_uid}.{name}{overload_key}"` for methods inside a class. The overload key is `(...)` for languages without overloading (Python) and the canonical, normalized param-**type** list for languages with it (Java) — never param names, defaults, annotations, or return type.
 
 ### `BaseFieldBuilder`
 - **Always parse `field_type`** from the type annotation. If `field_type` is left empty, `self.field.method()` resolution will silently fail — the resolver needs the type to find the class.
@@ -443,7 +482,7 @@ The file-level import parser only walks top-level AST children (direct children 
 
 ### Free function import resolution gap
 
-`from utils import format_currency` stores `"utils.format_currency"` in `file.imports`. The Step 3 potential parents list includes `"utils.format_currency"` as a parent name. But looking it up returns `None` — the actual UID is `"utils.py#format_currency(amount)"`, and the trailing parameter string means even the registry's logical-name translation can't match it. 
+`from utils import format_currency` stores `"utils.format_currency"` in `file.imports`. The Step 3 potential parents list includes `"utils.format_currency"` as a parent name. But looking it up returns `None` — the actual UID is `"utils.py#format_currency(...)"`, and the trailing overload key means a bare `utils.py#format_currency` lookup misses. (Because the Python key is the deterministic `(...)`, logical-name translation *can* reconstruct it by trying `remainder` then `remainder + "(...)"`; until that lands, the module-scope workaround below is required.) 
 
 Fix: override `_get_potential_lookup_parents` to also add the module scope (`"utils"`) so `resolve_methods` can find the method as a child of the file struct. See `PythonDependencyResolver._get_potential_lookup_parents` in §6.
 
@@ -493,7 +532,7 @@ Example unsupported patterns for Python (document the WHY):
 
 ## 10. Verification Checklist
 
-- [ ] UIDs follow the §0 formal definition: file UID = relative path, code structs = `file.ext#Code.path(params)`, prefix invariant holds for every parent/child pair
+- [ ] UIDs follow the §0 formal definition: file UID = relative path, code structs = `file.ext#Code.path<overload-key>` (`(...)` for non-overloading languages, canonical param-type list for overloading ones), prefix invariant holds for every parent/child pair
 - [ ] `file.package` set to the dotted logical module path (and verified present in the DB after a parse)
 - [ ] Tree-sitter dependency added to `pyproject.toml` and `requirements.txt`
 - [ ] `language.py` correctly exports the language object

@@ -10,6 +10,53 @@ from tostr.core.builders import BaseBuilder, BaseFileBuilder, BaseClassBuilder, 
 from tostr.languages.java.queries import DEPENDENCY_QUERY
 from tostr.core.models import *
 
+def _strip_java_package(t: str) -> str:
+    """Drop package qualifiers from a (non-generic, non-array) type, keeping the simple class name
+    plus any enclosing class names. This canonicalizes the *spelling* of a type so the UID is stable
+    when an author respells it — `String` / `java.lang.String`, `User` / `com.example.User`, and a
+    same-package `Order` / `com.example.Order` all collapse to one form, with no import map needed.
+
+    Heuristic: by Java convention package segments are lowercase-initial and type names are
+    uppercase-initial, so we keep everything from the first uppercase-initial segment onward. This
+    preserves inner classes (`java.util.Map.Entry` -> `Map.Entry`) while stripping the package.
+
+    Known limitation (documented in dependency_patterns.md): two distinct types that share a simple
+    name from different packages (`java.util.List` vs `java.awt.List`) collapse to the same token, so
+    overloads distinguished only by that would merge. This requires FQN-in-source overloading on
+    identically-named classes — vanishingly rare, and the false merge is preferred over the identity
+    instability that partial FQN expansion would cause."""
+    if '.' not in t:
+        return t
+    parts = t.split('.')
+    for i, p in enumerate(parts):
+        if p[:1].isupper():
+            return '.'.join(parts[i:])
+    return parts[-1]  # all-lowercase (e.g. an unconventional type) — fall back to the last segment
+
+def _normalize_java_param_type(raw: str) -> str:
+    """Canonicalize a declared parameter type into its overload-dispatch form for the UID
+    (see §0 overload-key rule). Java overload resolution uses *erased* types, so:
+      - generic arguments are erased     (List<String>      -> List)        — can't overload on them
+      - varargs collapse to an array     (String...         -> String[])    — varargs IS an array for dispatch
+      - package qualifiers are stripped  (java.lang.String  -> String)      — stable spelling (see _strip_java_package)
+      - whitespace is collapsed
+    Unlike the display signature, the UID type is NOT truncated (truncation would risk collisions)."""
+    t = re.sub(r'\s+', ' ', raw).strip()
+    if t.endswith('...'):
+        t = t[:-3].strip() + '[]'
+    # Erase generics by repeatedly stripping the innermost <...> until none remain (handles nesting).
+    while '<' in t:
+        new_t = re.sub(r'<[^<>]*>', '', t)
+        if new_t == t:
+            break  # unbalanced angle brackets — stop rather than loop forever
+        t = new_t
+    # Peel off (possibly multi-dimensional) array brackets, strip the package off the base, reattach.
+    arr = ''
+    while t.endswith('[]'):
+        arr += '[]'
+        t = t[:-2].strip()
+    return _strip_java_package(t) + arr
+
 class JavaBuilder(BaseBuilder):
     def build_file(self) -> JavaFileBuilder:
         return JavaFileBuilder(self.registry)
@@ -31,7 +78,7 @@ class JavaFileBuilder(BaseFileBuilder):
         with open(path, "rb") as f:
             body_bytes = f.read()
         file_obj.body = body_bytes.decode("utf-8")
-        file_obj.diff_hash = hashlib.md5(body_bytes).hexdigest() # Fallback until distributed hash is calculated
+        file_obj.diff_hash = hashlib.md5(body_bytes).hexdigest() # hash of the file's text body
         
         parser = Parser(JAVA_LANGUAGE)
         tree = parser.parse(body_bytes)
@@ -202,32 +249,39 @@ class JavaMethodBuilder(BaseMethodBuilder):
             name = name_node.text.decode('utf-8').strip()
         
         # PARAMETERS
+        # `parameters` holds the display form (truncated) for the signature; `uid_param_types`
+        # holds the normalized, untruncated overload-dispatch types for the UID (see §0).
         parameters = []
+        uid_param_types = []
         params_node = node.child_by_field_name('parameters')
         if params_node:
             for param_child in params_node.named_children:
                 if param_child.type == 'formal_parameter':
                     param_type_node = param_child.child_by_field_name('type')
                     if param_type_node:
-                        param_text = param_type_node.text.decode('utf-8').strip()
-                        # Collapse whitespace/newlines and truncate long types
-                        param_text = re.sub(r'\s+', ' ', param_text)
+                        raw_type = param_type_node.text.decode('utf-8').strip()
+                        uid_param_types.append(_normalize_java_param_type(raw_type))
+                        # Display form: collapse whitespace/newlines and truncate long types
+                        param_text = re.sub(r'\s+', ' ', raw_type)
                         if len(param_text) > 50:
                             param_text = param_text[:47] + "..."
                         parameters.append(param_text)
-            
+
         arity = len(parameters)
         parameters_string = f"({', '.join(parameters)})"
-        
+        # Overload key: ordered, normalized param TYPES (never names/return) so overloads get
+        # distinct UIDs while param renames / return-type changes keep `id` stable.
+        uid_params = f"({', '.join(uid_param_types)})"
+
         # SIGNATURE
         sig_prefix = " ".join(sig_parts).replace('\n', ' ')
         signature = f"{sig_prefix} {name}{parameters_string}".strip()
-        
+
         uid = ""
         if isinstance(parent, BaseFile):
-            uid = f"{parent.uid}#{name}{parameters_string}"
+            uid = f"{parent.uid}#{name}{uid_params}"
         else:
-            uid = f"{parent.uid}.{name}{parameters_string}"
+            uid = f"{parent.uid}.{name}{uid_params}"
         
         dependency_names = []
         

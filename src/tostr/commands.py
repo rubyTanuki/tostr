@@ -14,7 +14,8 @@ from tostr.core import Registry, tost, InspectResult, SkeletonResult, SearchResu
 from tostr.core.context.config import ProjectConfig
 from tostr.core.providers import LanguageProvider
 
-from tostr.exceptions import APIKeyError, DatabaseNotFoundError
+from tostr.core.cache_version import incompatibility_reason, read_db_version
+from tostr.exceptions import APIKeyError, DatabaseNotFoundError, CacheFormatError
 
 def _verify_db_exists(target_path: Path):
     """Ensure an initialized Tostr database exists for the given project path.
@@ -28,6 +29,12 @@ def _verify_db_exists(target_path: Path):
     if not db_path.exists():
         raise DatabaseNotFoundError(
             f"No Tostr database found at {db_path}. Run 'tostr init' first."
+        )
+    reason = incompatibility_reason(read_db_version(db_path))
+    if reason:
+        raise CacheFormatError(
+            f"Tostr cache at {db_path} is incompatible with this version ({reason}). "
+            f"Run 'tostr init' to rebuild it."
         )
 
 def get_llm_client(progress_tracker: "ProgressTracker" = None):
@@ -129,6 +136,14 @@ async def init_async(target_path: Path, use_cache: bool = True, language: str = 
     tostr_dir = target_path / ".tostr"
     tostr_dir.mkdir(exist_ok=True)
 
+    # If an existing cache is from an incompatible format, wipe it so we rebuild fresh and re-stamp
+    # the current version — otherwise INSERT OR REPLACE would leave a mixed-format graph behind.
+    db_path = tostr_dir / "cache.db"
+    if db_path.exists() and incompatibility_reason(read_db_version(db_path)):
+        logger.warning("Existing cache is an incompatible format; wiping it for a clean rebuild.")
+        for p in (db_path, db_path.with_name("cache.db-wal"), db_path.with_name("cache.db-shm")):
+            p.unlink(missing_ok=True)
+
     # Save language to config.toml
     config_path = tostr_dir / "config.toml"
     config_content = f"[project]\nlanguage = \"{language}\"\n"
@@ -198,6 +213,9 @@ async def skeleton_async(subpath: str, project_path: Path, depth: int = 7, files
 active_tasks = {}
 
 async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
+    # Resolve up front so symlinked roots (e.g. macOS /var -> /private/var) match the
+    # already-resolved paths that awatch emits; otherwise relative_to() below would raise.
+    target_path = Path(target_path).resolve()
     _verify_db_exists(target_path)
     try:
         llm = get_llm_client()
@@ -206,33 +224,48 @@ async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
         logger.warning("No API key found; watcher running in no-LLM mode (embeddings only, descriptions skipped).")
     config = ProjectConfig(target_path)
 
+    # Single-writer lock for all DB mutations from this watcher. Created here so it binds to this
+    # loop, and serializes the per-file write pipelines so a cancelled-but-in-flight thread write
+    # can't interleave with (or land after) its replacement. Passed into the task coroutines.
+    write_lock = asyncio.Lock()
+
     logger.info("Starting Listener")
     try:
         async for changes in awatch(target_path, stop_event=stop_event):
             for change_type, raw_path in changes:
-                abs_path = Path(raw_path)
+                # Keep the absolute path: process_single_file opens the file directly, and
+                # the MCP server's cwd is not the project root, so a relative path can't be read.
+                abs_path = Path(raw_path).resolve()
                 if config.is_ignored(abs_path):
                     continue
-                path = abs_path.relative_to(target_path)
-                
-                existing_task = active_tasks.get(path)
+                try:
+                    display_path = abs_path.relative_to(target_path)
+                except ValueError:
+                    display_path = abs_path
+
+                existing_task = active_tasks.get(abs_path)
                 if existing_task and not existing_task.done():
                     existing_task.cancel()
-                
+
                 match change_type:
-                    case Change.modified:
-                        logger.info(f"File modified: {path}")
-                    case Change.added:
-                        logger.info(f"File added: {path}")
                     case Change.deleted:
-                        logger.info(f"File deleted: {path}")
-                        # TODO: handle deletions in the db
-                        
-                new_task = asyncio.create_task(
-                    process_single_file(target_path, path, llm)
-                )
-                active_tasks[path] = new_task
-                
+                        logger.info(f"File deleted: {display_path}")
+                        new_task = asyncio.create_task(
+                            process_file_deletion(target_path, abs_path, write_lock=write_lock)
+                        )
+                    case Change.added:
+                        logger.info(f"File added: {display_path}")
+                        new_task = asyncio.create_task(
+                            process_single_file(target_path, abs_path, llm, write_lock=write_lock)
+                        )
+                    case _:  # Change.modified
+                        logger.info(f"File modified: {display_path}")
+                        new_task = asyncio.create_task(
+                            process_single_file(target_path, abs_path, llm, write_lock=write_lock)
+                        )
+
+                active_tasks[abs_path] = new_task
+
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("\n🛑 Stopping listener...")
 
@@ -273,31 +306,78 @@ async def search_async(query: str, project_path: Path, filter_type: str = None, 
                 
         return results
 
-async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient):
+async def _guarded_write(write_lock: "asyncio.Lock | None", filepath: Path, fn, *args, **kwargs):
+    """Run a DB-mutating call off-loop, serialized behind `write_lock` when one is supplied
+    (watcher mode). Inside the lock we re-check that this task is still the live task for `filepath`
+    and skip the write if it's been superseded by a newer change — so a cancelled-but-in-flight
+    pipeline can't clobber the result of the change that replaced it. When `write_lock` is None
+    (direct callers / tests, which await each call to completion) we just run the write."""
+    if write_lock is None:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    async with write_lock:
+        if active_tasks.get(filepath) is not asyncio.current_task():
+            logger.debug(f"Skipping superseded DB write for {filepath}")
+            return None
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+async def process_file_deletion(project_dir: Path, filepath: Path, write_lock: "asyncio.Lock | None" = None):
+    """Watcher deletion path: purge a removed file (or directory) and everything beneath it from
+    the cache, so no ghost structs/edges/vectors linger. The path is relativized the same way the
+    builders store it; `delete_path_subtree` cascades for directories via a path-prefix match."""
+    logger.info(f"Processing deletion {filepath}")
+    try:
+        db = SQLiteCache(project_dir / ".tostr" / "cache.db")
+        registry = Registry(db=db, use_cache=True, project_path=project_dir)
+        rel_path = str(registry.relative_to_project(Path(filepath)))
+        removed = await _guarded_write(write_lock, filepath, registry.delete_path_subtree, rel_path)
+        logger.debug(f"✅ Deleted {len(removed or [])} struct(s) for {rel_path}")
+    except asyncio.CancelledError:
+        logger.warning(f"Deletion task cancelled on {filepath}")
+    except Exception as e:
+        logger.warning(f"Error deleting {filepath}: {e}")
+    finally:
+        if active_tasks.get(filepath) == asyncio.current_task():
+            del active_tasks[filepath]
+
+
+async def process_single_file(project_dir: Path, filepath: Path, llm_client: LLMClient, write_lock: "asyncio.Lock | None" = None):
     logger.info(f"Processing file {filepath}")
     try:
         db = SQLiteCache(project_dir / ".tostr" / "cache.db")
-        
+
         registry = Registry(db=db, use_cache=True, project_path=project_dir)
         embedder = get_cached_embedding_client()
         parser = BaseParser(filepath, llm=llm_client, embedder=embedder, registry=registry)
-        
+
         parser.parse_path(filepath)
-        
+
+        # Nothing parsed (unsupported/ignored file) — don't prune, or we'd wipe the path's structs.
+        if registry.root is None:
+            logger.debug(f"No parseable struct produced for {filepath}; skipping cache write")
+            return
+
         parser.resolve_dependencies()
-        
-        await asyncio.to_thread(registry.save_to_cache, stale=True)
+
+        # Scope the diff-prune to exactly this file's relative path so removed/renamed members are
+        # purged. Matches what the builders store (BaseFileBuilder.from_path relativizes the path).
+        prune_paths = [str(registry.relative_to_project(Path(filepath)))]
+
+        # Reuse cached descriptions/vectors for members whose body is unchanged, so the describe +
+        # embed pass below only regenerates what actually changed (must run before both writes so
+        # the stale write doesn't blank carried-over descriptions).
+        await asyncio.to_thread(registry.carry_over_unchanged, prune_paths[0])
+
+        await _guarded_write(write_lock, filepath, registry.save_to_cache, stale=True, prune_paths=prune_paths)
         logger.debug("Wrote Cache w/ stale descriptions")
 
-        await asyncio.to_thread(registry.propagate_hash_update, str(filepath))
-        
         # resolve the descriptions and do the second cache write
         await parser.resolve_descriptions_async()
-        await asyncio.to_thread(registry.save_to_cache)
+        await _guarded_write(write_lock, filepath, registry.save_to_cache, prune_paths=prune_paths)
         logger.debug("Wrote Cache w/ resolved descriptions")
-        
+
         logger.debug(f"✅ Processed file {filepath}")
-        
+
     except asyncio.CancelledError:
         logger.warning(f"Task cancelled on {filepath}")
     except Exception as e:

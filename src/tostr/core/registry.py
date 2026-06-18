@@ -3,7 +3,6 @@ from collections import defaultdict
 from typing import List, Dict, Optional, TYPE_CHECKING, Set
 from pathlib import Path
 import json
-import hashlib
 import sqlite_vec
 import asyncio
 from loguru import logger
@@ -17,6 +16,15 @@ from tostr.core.resolver import BaseDependencyResolver
 if TYPE_CHECKING:
     from tostr.core.models import BaseStruct, BaseCodeStruct
     from tostr.core.utils.progress import ProgressTracker
+
+
+def _deserialize_float32(blob) -> Optional[List[float]]:
+    """Inverse of sqlite_vec.serialize_float32: turn a stored vector blob back into a float list.
+    Local `struct` import avoids shadowing the `struct`/`struct`-named loop vars used elsewhere."""
+    if blob is None:
+        return None
+    import struct as _s
+    return list(_s.unpack(f"{len(blob) // 4}f", blob))
 
 class Registry:
     def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None):
@@ -406,59 +414,118 @@ class Registry:
                 conn.executemany("INSERT INTO edges (source_id, target_id, edge_type) VALUES (?, ?, ?)", edges)
             conn.commit()
 
-    def propagate_hash_update(self, struct_uid: str):
-        """Iteratively updates the distributed hashes of all ancestors of a struct in the DB."""
+    def carry_over_unchanged(self, path_str: str) -> int:
+        """Before (re)describing a reparsed file, reuse cached descriptions + vectors for any struct
+        whose body is unchanged (its freshly-computed `diff_hash` matches the stored row). The
+        describer skips LLM generation when `description` is already set, and the embedder skips when
+        `vector` is set — so populating these here means only *changed* or *new* members pay the
+        expensive regeneration cost. A leaf method's hash is its own body; a class/file hash covers
+        all nested text, so an edited method correctly forces its class and file to regenerate while
+        untouched siblings are carried over. Returns the number of structs carried over."""
         if not self.db:
-            return
-
+            return 0
         with self.db.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 1. Get the initial ID of the struct
-            cursor.execute("SELECT id FROM structs WHERE uid = ?", (struct_uid,))
-            row = cursor.fetchone()
-            if not row:
-                logger.debug(f"Could not find struct with UID {struct_uid} to propagate hash update.")
-                return
-            current_id = row[0]
+            rows = conn.execute(
+                "SELECT id, uid, diff_hash, description FROM structs WHERE path = ?", (path_str,)
+            ).fetchall()
+            prev: Dict[str, dict] = {}
+            id_to_uid: Dict[str, str] = {}
+            for r in rows:
+                prev[r["uid"]] = {"diff_hash": r["diff_hash"], "description": r["description"] or "", "vector": None}
+                id_to_uid[str(r["id"])] = r["uid"]
+            if id_to_uid:
+                ph = ",".join("?" * len(id_to_uid))
+                for sid, vec in conn.execute(
+                    f"SELECT struct_id, vector FROM vec_structs WHERE struct_id IN ({ph})", list(id_to_uid)
+                ).fetchall():
+                    uid = id_to_uid.get(str(sid))
+                    if uid:
+                        prev[uid]["vector"] = _deserialize_float32(vec)
 
-            while True:
-                # 2. Find the parent
-                cursor.execute(
-                    "SELECT target_id FROM edges WHERE source_id = ? AND edge_type = 'is_child_of'", 
-                    (current_id,)
-                )
-                parent_row = cursor.fetchone()
-                if not parent_row:
-                    break
-                
-                parent_id = parent_row[0]
-                
-                # 3. Get all children's hashes for this parent
-                cursor.execute("""
-                    SELECT diff_hash FROM structs 
-                    WHERE id IN (SELECT source_id FROM edges WHERE target_id = ? AND edge_type = 'is_child_of')
-                """, (parent_id,))
-                child_hashes = [r[0] for r in cursor.fetchall() if r[0]]
-                
-                if not child_hashes:
-                    new_hash = ""
-                else:
-                    child_hashes.sort()
-                    new_hash = hashlib.md5("".join(child_hashes).encode("utf-8")).hexdigest()
-                
-                # 4. Update the parent's hash
-                cursor.execute("UPDATE structs SET diff_hash = ? WHERE id = ?", (new_hash, parent_id))
-                
-                # 5. Move up the tree
-                current_id = parent_id
-            
-            conn.commit()
+        carried = 0
+        for struct in self.uid_map.values():
+            p = prev.get(struct.uid)
+            if not p or not struct.diff_hash or p["diff_hash"] != struct.diff_hash:
+                continue
+            desc = p["description"]
+            if desc.startswith("[STALE] "):  # a prior interrupted update may have left the marker
+                desc = desc[len("[STALE] "):]
+            if desc:
+                struct.description = desc
+            if p["vector"] is not None:
+                struct.vector = p["vector"]
+            carried += 1
+        if carried:
+            logger.debug(f"Carried over {carried} unchanged struct description(s)/vector(s) under '{path_str}'")
+        return carried
 
-    def save_to_cache(self, stale: bool = False):
+    def struct_exists(self, uid: str) -> bool:
+        """Cheap existence check (in-memory first, then DB) — avoids the heavy hydration that
+        get_struct_by_uid performs. Used when re-linking a singly-parsed file to its parent dir."""
+        if uid in self.uid_map:
+            return True
+        if not self.db:
+            return False
+        with self.db.get_connection() as conn:
+            return conn.execute("SELECT 1 FROM structs WHERE uid = ? LIMIT 1", (uid,)).fetchone() is not None
+
+    def _delete_struct_ids(self, conn, ids: Set[str]) -> Set[str]:
+        """Hard-delete the given struct ids and everything attached to them — edges in BOTH
+        directions and vectors. Deleting inbound edges (target_id IN ids) is what keeps removed/
+        renamed structs from leaving dangling references behind; those dependents simply lose the
+        edge and re-form it the next time their own file is reparsed (or on a full reindex). We
+        deliberately do NOT re-resolve dependents here — see the plan's Phase 4 for the rationale
+        (Python's parameterless identity and Java's arity mean a dropped edge is either genuinely
+        broken or only a fuzzy match anyway). Operates on the caller's connection (no commit)."""
+        ids = {str(i) for i in ids}
+        if not ids:
+            return set()
+        cur = conn.cursor()
+        ph = ",".join("?" * len(ids))
+        rp = list(ids)
+        cur.execute(f"DELETE FROM structs WHERE id IN ({ph})", rp)
+        cur.execute(f"DELETE FROM edges WHERE source_id IN ({ph})", rp)
+        cur.execute(f"DELETE FROM edges WHERE target_id IN ({ph})", rp)
+        cur.execute(f"DELETE FROM vec_structs WHERE struct_id IN ({ph})", rp)
+        return ids
+
+    def _prune_file_path(self, conn, path_str: str, kept_ids: Set[str]) -> Set[str]:
+        """Delete structs stored under `path_str` whose id is no longer present in `kept_ids`
+        (i.e. members removed/renamed out of the file on this reparse). Returns the removed ids."""
+        cur = conn.cursor()
+        stored = {str(r[0]) for r in cur.execute("SELECT id FROM structs WHERE path = ?", (path_str,)).fetchall()}
+        removed = stored - kept_ids
+        if removed:
+            self._delete_struct_ids(conn, removed)
+            logger.debug(f"Pruned {len(removed)} removed struct(s) under '{path_str}'")
+        return removed
+
+    def delete_path_subtree(self, path_str: str) -> Set[str]:
+        """Remove a deleted file or directory from the cache entirely: every struct at `path_str`
+        or beneath it (the `path LIKE '<dir>/%'` clause cascades a directory; for a single file it
+        matches only that file's own structs), plus their edges and vectors. Used by the watcher's
+        deletion path. Returns the removed ids."""
         if not self.db:
             raise RuntimeError("SqLiteCache not provided.")
-        
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id FROM structs WHERE path = ? OR path LIKE ? || '/%'",
+                (path_str, path_str),
+            ).fetchall()
+            removed = self._delete_struct_ids(conn, {str(r[0]) for r in rows})
+            conn.commit()
+        if removed:
+            logger.info(f"Deleted {len(removed)} struct(s) under '{path_str}' (file/dir removal)")
+        return removed
+
+    def save_to_cache(self, stale: bool = False, prune_paths: Optional[List[str]] = None):
+        """Persist the in-memory structs. When `prune_paths` is given (the relative file path(s)
+        being reparsed by the watcher), any struct previously stored under those paths but absent
+        from this parse is deleted — this is what keeps incremental updates from leaking ghosts
+        when a member is removed or renamed. Full re-parses pass no prune_paths."""
+        if not self.db:
+            raise RuntimeError("SqLiteCache not provided.")
+
         parsed_ids = [(node.id,) for node in self.uid_map.values()]
         grouped_nodes = defaultdict(list)
         all_edges = set()
@@ -502,5 +569,12 @@ class Registry:
                 # so we manually delete to avoid duplicates before inserting.
                 conn.executemany("DELETE FROM vec_structs WHERE struct_id = ?", [(v[0],) for v in vectors])
                 conn.executemany("INSERT INTO vec_structs (struct_id, vector) VALUES (?, ?)", vectors)
-                
+
+            # Diff-prune: now that the freshly-parsed structs are written, remove anything that used
+            # to live under these paths but is gone from this parse (deleted/renamed members).
+            if prune_paths:
+                kept_ids = {node.id for node in self.uid_map.values()}
+                for path_str in prune_paths:
+                    self._prune_file_path(conn, path_str, kept_ids)
+
             conn.commit()
