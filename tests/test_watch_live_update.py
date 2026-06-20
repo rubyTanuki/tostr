@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 import tostr.commands as commands
-from tostr.commands import init_async, process_single_file, process_file_deletion, watch_async
+from tostr.commands import parse_async, process_single_file, process_file_deletion, watch_async
 from tostr.core.db import SQLiteCache
 from tostr.exceptions import APIKeyError
 
@@ -63,7 +63,7 @@ def add_method(proj: Path) -> None:
 
 async def test_process_single_file_updates_tree(no_llm, project):
     """A modified file is reparsed and the new struct lands in the cached tree."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
 
     before = method_uids(project)
     assert any("apply_discount" in m for m in before)
@@ -126,7 +126,7 @@ def remove_apply_discount(proj: Path) -> None:
 
 async def test_removed_method_is_purged(no_llm, project):
     """Removing a member deletes its struct row, its vector, and any edge touching it — no ghost."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
 
     old_ids = ids_for_uid_substr(project, "apply_discount")
     assert old_ids, "fixture should have apply_discount before edit"
@@ -142,7 +142,7 @@ async def test_removed_method_is_purged(no_llm, project):
 
 async def test_renamed_method_drops_old_identity(no_llm, project):
     """Renaming a method (new uid -> new id) purges the old identity rather than orphaning it."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
     old_ids = ids_for_uid_substr(project, "apply_discount")
     assert old_ids
 
@@ -159,7 +159,7 @@ async def test_renamed_method_drops_old_identity(no_llm, project):
 
 async def test_file_keeps_parent_edge_after_update(no_llm, project):
     """A reparsed file must stay attached to its parent directory (is_child_of edge survives)."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
 
     def parent_edge():
         with _db(project).get_connection() as c:
@@ -182,7 +182,7 @@ async def test_file_keeps_parent_edge_after_update(no_llm, project):
 
 async def test_removing_depended_on_class_cleans_cross_file_edges(no_llm, project):
     """Removing a class that another file depends on must not leave the caller's edge dangling."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
 
     user_ids = ids_for_uid_substr(project, "models.py#User")
     assert user_ids, "User subtree should exist after init"
@@ -205,7 +205,7 @@ async def test_removing_depended_on_class_cleans_cross_file_edges(no_llm, projec
 
 async def test_deleted_file_is_purged(no_llm, project):
     """Deleting a file removes its whole subtree and leaves no dangling cross-file edges."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
     assert any(u == "models.py" for u in all_uids(project))
     # main.py depends on models — that cross-file edge must not dangle after deletion.
     models_ids = ids_for_uid_substr(project, "models.py")
@@ -224,7 +224,7 @@ async def test_deleted_file_is_purged(no_llm, project):
 
 async def test_directory_deletion_cascades(no_llm, project):
     """Deleting a directory purges every struct beneath it, not just the directory node."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
     assert any(u.startswith("services/") for u in all_uids(project)), "services subtree should exist"
     services_ids = ids_for_uid_substr(project, "services")
 
@@ -246,7 +246,7 @@ async def test_unchanged_members_are_not_regenerated(no_llm, project, monkeypatc
     diff_hash gate governs description reuse). Embed texts are `"{uid}: {body}"`, so we recover
     which uids were embedded.
     """
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
 
     embedder = commands.get_cached_embedding_client()
     embedded: list[str] = []
@@ -276,7 +276,7 @@ async def test_unchanged_members_are_not_regenerated(no_llm, project, monkeypatc
 
 async def test_watcher_live_updates_on_modification(no_llm, project):
     """End-to-end: the running watcher detects a save and updates the DB itself."""
-    await init_async(project, no_llm=True)
+    await parse_async(project, no_llm=True)
     assert not any("promo_special" in m for m in method_uids(project))
 
     stop_event = asyncio.Event()

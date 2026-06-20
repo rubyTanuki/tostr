@@ -9,7 +9,7 @@ from tostr.core.models import BaseStruct
 @pytest.fixture
 def registry(tmp_path):
     (tmp_path / ".tostr").mkdir()
-    (tmp_path / ".tostr" / "config.toml").write_bytes(b'[project]\nlanguage = "python"\n')
+    (tmp_path / "tostr.toml").write_bytes(b'[project]\nlanguage = "python"\n')
     return Registry(project_path=tmp_path, use_cache=False)
 
 

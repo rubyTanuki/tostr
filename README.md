@@ -16,7 +16,7 @@ Tostr is a CLI and MCP agent context engine which greatly reduces token costs an
 
 # Features
 ### 🌴 Pre-computed Abstract Syntax Tree
-Tostr scrapes your project on initialization, building a comprehensive Abstract Syntax Tree IR (Intermediate Representation) of the entire OOP code structure and stores it in a local SQLite database.
+Tostr scrapes your project when you parse it, building a comprehensive Abstract Syntax Tree IR (Intermediate Representation) of the entire OOP code structure and stores it in a local SQLite database.
 
 ### ⛓️ Heuristic Dependency Graph Resolution
 Tostr resolves dependencies between structures in your code, building a dependency graph to allow agents to traverse inbound or outbound method calls efficiently.
@@ -134,29 +134,50 @@ Below are instructions and links for setting up MCP servers in common AI coding 
 *   **Cline (VS Code)**: [Cline Documentation](https://docs.cline.bot/mcp/mcp-overview)
 *   **Codex**: [Codex Documentation](https://developers.openai.com/codex/mcp)
 
-## Initializing Tostr
-Before being able to use Tostr, the repository must be initialized using the CLI or MCP.
+## Setting up Tostr
 
-To manually initialize the repository, `cd` to the root of the project in a terminal window and run:
+Tostr separates **authoring configuration** from **building the cache**:
+
+- **`tostr.toml`** (project root, committed) holds your project settings, and **`.tostrignore`** (project root, committed) holds your ignore rules. These are *yours* — you edit them and they survive any cache wipe.
+- **`.tostr/`** (hidden, gitignored) is generated and disposable. `tostr parse` rebuilds it from scratch; `tostr clean` removes it.
+
+### `tostr init` — scaffold project files (optional)
+
 ```
 tostr init .
 ```
-This creates the `.tostr` directory and initializes the default `.tostrignore` to exclude environment files, node_modules, build artifacts, and other files which are not needed in the project AST based on the desired language. It also creates a `config.toml` in your project's `.tostr/` directory, storing the projects configurations. Currently this is only the language, but more will be configured here in the future.
+This lays down the editable project files so you have something concrete to configure:
+- creates `tostr.toml` at the root, pre-filled with documented defaults;
+- creates `.tostrignore` at the root, materialized from the default templates (environment files, build artifacts, `node_modules/`, `venv/`, `target/`, etc.) for your language(s);
+- creates the empty `.tostr/` directory and adds it to your `.gitignore`.
 
-The `--language` flag is optional. If none is provided, tostr will parse each file which has a supported file extension, treating them all as valid dependency nodes. If you choose a specific language extension, only that extension will be parsed. Also, if no language extension is explicitly chosen, the .tostrignore will be initialized with a default, agnostic ignore file.
+`init` **does not parse** and never needs an API key. It is also **idempotent**: it never overwrites an existing `tostr.toml` or `.tostrignore` (pass `--force` to overwrite). `init` is entirely optional — if you're happy with the defaults you can skip straight to `tostr parse`, which falls back to the same built-in defaults without writing any files.
 
-> Tostr currently only supports .java and .py, so the options for --language are 'java', 'py'.
+**Available Flags**:
+- `--force`, `-f`: Overwrite existing authored files (`tostr.toml`, `.tostrignore`) instead of leaving them untouched. Default is `False`
+- `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
+
+### `tostr parse` — build the database
+
+```
+tostr parse .
+```
+This does the actual work: it parses the AST, resolves dependencies, generates descriptions, embeds them, and writes `.tostr/cache.db`. It **reads** your configuration (or the built-in defaults) and authors nothing. Run it whenever you want to (re)build the cache.
+
+The `--language` flag overrides the configured language for this run only. If omitted, `parse` uses the `language` from `tostr.toml` (defaulting to `auto`, which parses every file with a supported extension and treats them all as valid dependency nodes). Choosing a specific language parses only that extension.
+
+> Tostr currently supports `.java` and `.py`, so the options for `--language` are `java` and `python`.
 
 If you are running tostr on a project that already has an existing database but you want to reparse from the start, use the `--no-cache` flag.
 
 **Available Flags**:
 - `--use-cache`, `--no-cache`: Load the existing cache if it exists (use `--no-cache` to force a full reparse from scratch). Default is `True`
-- `--language`, `-l`: Restrict parsing to one language (e.g., `java`, `python`). Omit to auto-detect and parse all supported languages by extension. Default is `auto`
+- `--language`, `-l`: Override the configured language for this run (e.g., `java`, `python`). Omit to use `tostr.toml` (defaults to `auto`).
 - `--no-llm`: Skip LLM-generated descriptions (no API key required). Embeddings fall back to code context. Default is `False`
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
 ## Traversing the graph
-Once the project is initialized, Tostr is ready to go! The CLI provides a rich, interactive way to explore your project's structure.
+Once the project is parsed, Tostr is ready to go! The CLI provides a rich, interactive way to explore your project's structure.
 
 ### Project Skeleton
 To see the high-level structure of your project, run:
@@ -212,7 +233,7 @@ tostr inspect M-bc1cb7aeff --body .
 Beyond traversing the graph, Tostr provides a handful of commands for managing the database, keeping it in sync, and running the MCP server. Every command accepts an optional `path` argument (defaulting to the current directory `.`) pointing at the project root, and every command supports `--debug` / `--no-debug` (`-d` / `-nd`) to enable debug logging.
 
 ### `tostr status`
-Show whether Tostr has been initialized in a project, along with the database location, size, last-updated time, and per-type struct counts.
+Show whether Tostr has built a cache for a project, along with the database location, size, last-updated time, and per-type struct counts.
 ```
 tostr status .
 ```
@@ -228,11 +249,12 @@ tostr watch .
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
 ### `tostr clean`
-Clean (wipe) the SQLite database for a project, removing the cached AST and dependency graph. Useful before a fresh `init` or to reclaim space.
+Remove the generated `.tostr/` cache (the AST and dependency graph), so `tostr parse` can rebuild from scratch or to reclaim space. Your authored config (`tostr.toml`, `.tostrignore`) is **preserved** — `clean && parse` returns to a fresh build with your settings intact. Pass `--purge` to also delete the authored config for a full reset.
 ```
 tostr clean .
 ```
 **Available Flags**:
+- `--purge`: Also delete authored config (`tostr.toml`, `.tostrignore`), not just the generated `.tostr/` cache. Default is `False`
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
 ### `tostr start-mcp`

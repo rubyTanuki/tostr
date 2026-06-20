@@ -14,9 +14,10 @@ from tostr.core.db import SQLiteCache
 from tostr.core.registry import Registry
 
 from tostr.commands import (
-    init_async, 
-    inspect_async, 
-    skeleton_async, 
+    init_project,
+    parse_async,
+    inspect_async,
+    skeleton_async,
     watch_async,
     clean_db,
     search_async
@@ -24,68 +25,105 @@ from tostr.commands import (
 from tostr.core import InspectResult, SkeletonResult, SearchResult
 from tostr.core.utils.logger import configure_mcp_logging
 
-class MCPSession:
+
+class WatcherRegistry:
+    """Tracks one background file-watcher per project path.
+
+    The server is stateless about which project it's serving — every tool takes an absolute
+    workspace path — so multiple projects can be watched at once, keyed by resolved path."""
+
     def __init__(self):
-        self.is_initialized = False
-        self.project_dir = None
-        self.watcher_thread = None
-        self.watcher_loop = None
-        self.stop_event = None
+        self._watchers: dict[str, dict] = {}
 
-    def stop_watcher(self):
-        """Cleanly stops the background watcher thread if it exists."""
-        if self.watcher_loop and self.stop_event:
-            logger.info("Signaling background watcher to stop...")
-            self.watcher_loop.call_soon_threadsafe(self.stop_event.set)
-            
-            if self.watcher_thread:
-                # We wait briefly for it to shut down
-                self.watcher_thread.join(timeout=2)
-                if self.watcher_thread.is_alive():
-                    logger.warning("Watcher thread did not shut down in time.")
-        
-        self.watcher_thread = None
-        self.watcher_loop = None
-        self.stop_event = None
+    def start(self, target_path: Path):
+        """(Re)start the watcher for a project; replaces any existing one for the same path."""
+        key = str(target_path)
+        self.stop(target_path)
 
-    def start_watcher(self, target_path: Path):
-        """Starts the background watcher thread."""
-        self.stop_watcher()
-        
-        self.watcher_thread = threading.Thread(
-            target=self._run_watcher_thread,
-            args=(target_path,),
-            daemon=True
-        )
-        self.watcher_thread.start()
+        entry: dict = {"thread": None, "loop": None, "stop_event": None}
+        thread = threading.Thread(target=self._run, args=(target_path, key, entry), daemon=True)
+        entry["thread"] = thread
+        self._watchers[key] = entry
+        thread.start()
 
-    def _run_watcher_thread(self, target_path: Path):
-        """
-        Sets up an isolated async environment for the background thread,
-        then runs your watch_async loop inside it.
-        """
+    def _run(self, target_path: Path, key: str, entry: dict):
+        """Isolated async environment for one project's watch loop."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        self.watcher_loop = loop
-        self.stop_event = asyncio.Event()
-        
+        entry["loop"] = loop
+        entry["stop_event"] = asyncio.Event()
+
         try:
-            loop.run_until_complete(watch_async(target_path, stop_event=self.stop_event))
+            loop.run_until_complete(watch_async(target_path, stop_event=entry["stop_event"]))
         except Exception as e:
-            logger.exception(f"Fatal error in background watcher: {e}")
+            logger.exception(f"Fatal error in background watcher for {key}: {e}")
         finally:
             loop.close()
-            logger.info("Background watcher shut down cleanly.")
+            logger.info(f"Background watcher for {key} shut down cleanly.")
 
-session = MCPSession()
+    def stop(self, target_path: Path):
+        """Cleanly stop and forget the watcher for a project path, if one is running."""
+        key = str(target_path)
+        entry = self._watchers.pop(key, None)
+        if not entry:
+            return
+        loop, stop_event, thread = entry.get("loop"), entry.get("stop_event"), entry.get("thread")
+        if loop and stop_event:
+            logger.info(f"Signaling background watcher for {key} to stop...")
+            loop.call_soon_threadsafe(stop_event.set)
+        if thread:
+            thread.join(timeout=2)
+            if thread.is_alive():
+                logger.warning(f"Watcher thread for {key} did not shut down in time.")
+
+
+watchers = WatcherRegistry()
 mcp = FastMCP("Tostr")
 
+
+def _resolve_workspace(workspace_path: str) -> Path:
+    """Validate and resolve an absolute workspace path, raising TostrError with an agent-friendly
+    message otherwise. Every tool takes an explicit absolute path because the agent's working
+    directory is unreliable and the server serves many projects at once."""
+    target = Path(workspace_path)
+    if not target.is_absolute():
+        raise TostrError(
+            f"workspace_path must be an absolute path. You provided '{workspace_path}'. "
+            f"Determine the absolute path of the project workspace and try again."
+        )
+    target = target.resolve()
+    if not target.exists():
+        raise TostrError(f"Workspace path does not exist: {target}")
+    return target
+
+
 @mcp.tool()
-async def init(workspace_path: str, use_cache: bool = True, language: str = "auto", no_llm: bool = False) -> str:
+async def init(workspace_path: str, force: bool = False) -> str:
     """
-    -- MUST BE RUN BEFORE ANY OTHER TOOL --
-    Initializes the Tostr MCP server for a specific project workspace.
-    By default, it will attempt to sync with an existing database if one is found.
+    Scaffold Tostr's authored config files (tostr.toml, .tostrignore) and gitignore the cache.
+    Does NOT parse or build the database — call `parse` for that. This step is optional; defaults
+    work without it. Use it only to materialize config files the user wants to review or edit.
+
+    Args:
+        workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths.
+        force: Overwrite existing tostr.toml/.tostrignore instead of leaving them untouched.
+    """
+    try:
+        target_path = _resolve_workspace(workspace_path)
+        configure_mcp_logging(target_path)
+        report = init_project(target_path, force=force)
+        return "Scaffolded project:\n" + "\n".join(f"  - {line}" for line in report)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+async def parse(workspace_path: str, use_cache: bool = True, language: str = None, no_llm: bool = False) -> str:
+    """
+    -- BUILD STEP: run this before querying a project (skeleton/search/inspect) for the first time --
+    Parse a project, build the AST + dependency graph + semantic embeddings, and write the cache to
+    .tostr/cache.db. Also starts a background watcher that keeps the cache fresh as files change.
+    Safe to call for multiple projects; each is tracked independently by its absolute path.
 
     CRITICAL: Always use Tostr tools (skeleton, search, inspect) instead of standard file-reading
     or grep tools for project navigation. Tostr provides AST-aware context and semantic search
@@ -94,48 +132,24 @@ async def init(workspace_path: str, use_cache: bool = True, language: str = "aut
     Args:
         workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths. If you only have a relative path, you must determine the absolute path of the current workspace first.
         use_cache: Whether to use the existing AST cache. If False, forces a full re-parse.
-        language: Restrict parsing to one language (e.g., 'java', 'python'). **Defaults to 'auto'**, which parses every supported language in the repo, routed per-file by extension. Only pass an explicit language to deliberately exclude others.
+        language: Restrict parsing to one language (e.g., 'java', 'python'). Omit to use the project's tostr.toml (defaults to 'auto', which parses every supported language, routed per-file by extension). Only pass an explicit language to deliberately exclude others.
         no_llm: If True, skip LLM-generated descriptions entirely (no API key required). The AST, dependency graph, and semantic embeddings are still built; embeddings fall back to code context instead of descriptions.
     """
-    
-    target_path = Path(workspace_path)
-    
-    if not target_path.is_absolute():
-        return (f"Error: workspace_path must be an absolute path. You provided '{workspace_path}'. "
-                f"Please determine the absolute path of the current workspace and try again.")
-    
-    target_path = target_path.resolve()
-    
-    if not target_path.exists():
-        return f"Fatal Error: Workspace path does not exist: {target_path}"
-    
-    # Check if we are already initialized for this path
-    if session.is_initialized and session.project_dir == target_path and use_cache:
-        return f"Status: Already initialized for {target_path}. Set use_cache=False to force a re-parse."
-        
-    db_path = target_path / ".tostr" / "cache.db"
-    
     try:
+        target_path = _resolve_workspace(workspace_path)
         configure_mcp_logging(target_path)
-        
-        # Auto-sync logic: If DB exists and we are using cache, just latch on.
+        db_path = target_path / ".tostr" / "cache.db"
+
+        # Auto-sync: if the cache already exists and we're allowed to use it, just (re)attach the watcher.
         if db_path.exists() and use_cache:
-            session.project_dir = target_path
-            session.start_watcher(target_path)
-            session.is_initialized = True
-            return f"Success: Tostr synced with existing database at {target_path}. Background watcher active."
+            watchers.start(target_path)
+            return f"Success: Tostr synced with existing cache at {db_path}. Background watcher active on {target_path}."
 
-        # Otherwise, perform full initialization/parse
-        await init_async(target_path, use_cache, language, no_llm=no_llm)
-
-        session.project_dir = target_path
-        session.start_watcher(target_path)
-        session.is_initialized = True
-        
-        return f"Success: Tostr initialized and parsed. Cache is built at {db_path}. Background watcher is now actively listening on {target_path}"
-        
+        await parse_async(target_path, use_cache, language, no_llm=no_llm)
+        watchers.start(target_path)
+        return f"Success: Tostr parsed and built the cache at {db_path}. Background watcher is now actively listening on {target_path}."
     except Exception as e:
-        return f"Fatal Error Initializing Tostr: {str(e)}"
+        return f"Fatal Error parsing Tostr project: {str(e)}"
 
 def _parse_list_input(input_val: Union[str, List[str]]) -> List[str]:
     """Flexible parser for list inputs that might be strings, JSON strings, or actual lists."""
@@ -234,7 +248,7 @@ def _render_search(results: List[SearchResult]) -> str:
     return "\n".join([f"{r.id}|{r.uid} ({r.type})" for r in results])
 
 @mcp.tool()
-async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False, max_lines: int = 500) -> str:
+async def inspect_by_id(workspace_path: str, ids: Union[str, List[str]], include_body: bool = False, max_lines: int = 500) -> str:
     """
     Output the AST details and code for specific struct IDs.
     Use this when you need the full implementation details of specific functions or classes.
@@ -244,19 +258,18 @@ async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False, 
     - `<` : Inbound dependency. The listed ID calls or uses this struct.
     - `~` : Related or sibling struct (e.g., in the same file or closely coupled).
     - `//`: AI-generated or docstring summary of the code.
-    
+
     Args:
+        workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths.
         ids: A list or comma-separated string of unique Tostr IDs of the structs to inspect.
         include_body: Include the raw code body in the output.
         max_lines: Maximum number of lines to include in the output (default: 500).
     """
-    if not session.is_initialized:
-        return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
-    
     try:
+        target_path = _resolve_workspace(workspace_path)
         id_list = _parse_list_input(ids)
-        results = await inspect_async(id_list, session.project_dir, include_body)
-        
+        results = await inspect_async(id_list, target_path, include_body)
+
         rendered_results = []
         for res in results:
             rendered_results.append(_render_inspect(res))
@@ -272,7 +285,7 @@ async def inspect_by_id(ids: Union[str, List[str]], include_body: bool = False, 
         return f"Error: {e}"
 
 @mcp.tool()
-async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False, max_lines: int = 500) -> str:
+async def inspect_by_uid(workspace_path: str, uids: Union[str, List[str]], include_body: bool = False, max_lines: int = 500) -> str:
     """
     Output the AST details and code for specific struct UIDs.
     Use this when you have the UID from a previous query or from the skeleton output and want to see the full details.
@@ -282,19 +295,18 @@ async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False
     - `<` : Inbound dependency. The listed ID calls or uses this struct.
     - `~` : Related or sibling struct (e.g., in the same file or closely coupled).
     - `//`: AI-generated or docstring summary of the code.
-    
+
     Args:
+        workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths.
         uids: A list or comma-separated string of unique Tostr UIDs of the structs to inspect.
         include_body: Include the raw code body in the output.
         max_lines: Maximum number of lines to include in the output (default: 500).
     """
-    if not session.is_initialized:
-        return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
-    
     try:
+        target_path = _resolve_workspace(workspace_path)
         uid_list = _parse_list_input(uids)
-        results = await inspect_async(uid_list, session.project_dir, include_body)
-        
+        results = await inspect_async(uid_list, target_path, include_body)
+
         rendered_results = []
         for res in results:
             rendered_results.append(_render_inspect(res))
@@ -310,62 +322,59 @@ async def inspect_by_uid(uids: Union[str, List[str]], include_body: bool = False
         return f"Error: {e}"
 
 @mcp.tool()
-async def clean(workspace_path: str) -> str:
+async def clean(workspace_path: str, purge: bool = False) -> str:
     """
-    Clean the SQLite database for a specific workspace and reset the server state if it matches.
+    Remove the generated .tostr/ cache for a workspace and stop its background watcher.
+
+    Args:
+        workspace_path: The ABSOLUTE path to the project workspace.
+        purge: Also delete authored config (tostr.toml, .tostrignore), not just the cache.
     """
     try:
-        project_dir = Path(workspace_path).resolve()
-        clean_db(project_dir)
-        
-        if session.project_dir == project_dir:
-            session.stop_watcher()
-            session.is_initialized = False
-            session.project_dir = None
-            
-        return f"Success: Database cleaned for {project_dir}."
+        project_dir = _resolve_workspace(workspace_path)
+        watchers.stop(project_dir)
+        clean_db(project_dir, purge=purge)
+        return f"Success: cleaned {project_dir}." + (" Authored config purged." if purge else "")
     except Exception as e:
         return f"Error: {e}"
 
 @mcp.tool()
-async def search(query: str, filter: str = None, top_k: int = 5) -> str:
+async def search(workspace_path: str, query: str, filter: str = None, top_k: int = 5) -> str:
     """
     Perform a SEMANTIC search for code structs using vector embeddings.
-    Always prioritize this over `grep` when looking for logic or functionality, as it 
+    Always prioritize this over `grep` when looking for logic or functionality, as it
     understands meaning rather than just matching characters.
-    
+
     Args:
+        workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths.
         query: The search term or sentence to find similar code for.
         filter: Optional filter by struct type (e.g., 'class', 'method').
         top_k: Number of results to return (default: 5).
     """
-    if not session.is_initialized:
-        return "Error: Tostr is not initialized. You must call 'init' with the absolute workspace path first."
-    
     try:
-        results = await search_async(query, session.project_dir, filter_type=filter, top_k=top_k)
+        target_path = _resolve_workspace(workspace_path)
+        results = await search_async(query, target_path, filter_type=filter, top_k=top_k)
         return _render_search(results)
     except Exception as e:
         return f"Error: {e}"
 
 @mcp.tool()
-async def skeleton(subpath: str, files_only: bool = False, depth: int = 4, max_lines: int = 500) -> str:
+async def skeleton(workspace_path: str, subpath: str, files_only: bool = False, depth: int = 4, max_lines: int = 500) -> str:
     """
-    Output the AST skeleton for a subpath. 
-    ALWAYS use this before calling `read_file` or `list_files` to understand the 
+    Output the AST skeleton for a subpath.
+    ALWAYS use this before calling `read_file` or `list_files` to understand the
     architecture, classes, and function signatures of a directory or file.
-    
+
     Args:
+        workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths.
         subpath: File or directory path relative to the project root to generate a skeleton for.
         files_only: If True, only include files and directories, excluding any code structs. Default is False, which includes all structs.
         depth: Controls directory/file/class nesting. Default is 4. Class members (methods/fields) are never expanded in the skeleton; only top-level functions that live directly on a file are shown. Inspect a class or file to see its members.
         max_lines: Maximum number of lines to include in the output (default: 500).
     """
-    if not session.is_initialized:
-        return "Error: Tostr is not initialized. You must call 'init' or 'sync' with the absolute workspace path before querying the database."
-    
     try:
-        result = await skeleton_async(subpath, session.project_dir, files_only=files_only, depth=depth)
+        target_path = _resolve_workspace(workspace_path)
+        result = await skeleton_async(subpath, target_path, files_only=files_only, depth=depth)
         
         rendered = _render_skeleton(result)
         

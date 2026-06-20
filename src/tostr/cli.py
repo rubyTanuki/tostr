@@ -13,9 +13,10 @@ from rich.theme import Theme
 from rich.highlighter import RegexHighlighter
 
 from tostr.commands import (
-    init_async, 
-    inspect_async, 
-    skeleton_async, 
+    init_project,
+    parse_async,
+    inspect_async,
+    skeleton_async,
     watch_async,
     clean_db,
     search_async,
@@ -133,7 +134,7 @@ def status(
                 typer.echo(f"   {type_name}: {count}")
         else:
             typer.secho("❌ Database: Not found", fg="red")
-            typer.echo("   Run 'tostr init' to initialize the database.")
+            typer.echo("   Run 'tostr parse' to build the database.")
         typer.echo("")
         
     except Exception as e:
@@ -177,19 +178,26 @@ def clean(
         dir_okay=True,
         resolve_path=True  # Converts relative paths to absolute paths automatically
     ),
-    debug: Annotated[
-        bool, 
+    purge: Annotated[
+        bool,
         typer.Option(
-            "--debug/--no-debug", 
+            "--purge",
+            help="Also delete authored config (tostr.toml, .tostrignore), not just the generated .tostr/ cache."
+        )
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug/--no-debug",
             "-d/-nd",
             help="Enable debug logging"
             )
     ] = False
 ):
-    """Clean the SQLite database."""
+    """Remove the generated .tostr/ cache (use --purge to also delete authored config)."""
     configure_cli_logging(debug)
     try:
-        clean_db(path)
+        clean_db(path, purge=purge)
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
@@ -197,7 +205,47 @@ def clean(
 @app.command()
 def init(
     path: Path = typer.Argument(
-        ".", 
+        ".",
+        help="Path to the project directory to scaffold",
+        exists=True,       # Typer automatically checks if the path exists
+        file_okay=False,   # Typer blocks files, only allowing directories
+        dir_okay=True,
+        resolve_path=True  # Converts relative paths to absolute paths automatically
+    ),
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "-f",
+            help="Overwrite existing authored files (tostr.toml, .tostrignore) instead of leaving them untouched."
+        )
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug/--no-debug",
+            "-d/-nd",
+            help="Enable debug logging"
+            )
+    ] = False
+):
+    """Scaffold project files (tostr.toml, .tostrignore, .gitignore). Does not parse — run 'tostr parse' to build the cache."""
+    configure_cli_logging(debug)
+    try:
+        report = init_project(path, force=force)
+    except TostrError as e:
+        typer.secho(f"❌ Error: {e}", fg="red", err=True)
+        raise typer.Exit(code=1)
+
+    for line in report:
+        typer.echo(f"   {line}")
+    typer.secho("✅ Scaffolded project. Edit tostr.toml / .tostrignore, then run 'tostr parse'.", fg="green")
+
+
+@app.command()
+def parse(
+    path: Path = typer.Argument(
+        ".",
         help="Path to the project directory to scan",
         exists=True,       # Typer automatically checks if the path exists
         file_okay=False,   # Typer blocks files, only allowing directories
@@ -205,9 +253,9 @@ def init(
         resolve_path=True  # Converts relative paths to absolute paths automatically
     ),
     use_cache: Annotated[
-        bool, 
+        bool,
         typer.Option(
-            "--use-cache/--no-cache", 
+            "--use-cache/--no-cache",
             help="Load cache if it exists"
             )
         ] = True,
@@ -216,9 +264,9 @@ def init(
         typer.Option(
             "--language",
             "-l",
-            help="Restrict parsing to one language (e.g., 'java', 'python'). Omit to auto-detect and parse all supported languages by extension."
+            help="Override the configured language for this run (e.g., 'java', 'python'). Omit to use tostr.toml (defaults to 'auto', which parses all supported languages by extension)."
         )
-    ] = "auto",
+    ] = None,
     no_llm: Annotated[
         bool,
         typer.Option(
@@ -235,18 +283,18 @@ def init(
             )
     ] = False
 ):
-    """Parse files and setup SQLite database."""
+    """Parse files and build the SQLite database from configuration."""
     configure_cli_logging(debug)
     start_time = time.perf_counter()
-    
+
     embedding_model_path = Path.home() / ".cache" / "tostr" / "models" / "all-MiniLM-L6-v2" / "model.onnx"
     if not embedding_model_path.exists():
         typer.echo(f"Embedding model not found at {embedding_model_path}. Downloading from huggingface...")
-    
+
     typer.echo(f"Parsing and describing files...")
     try:
         if debug:
-            asyncio.run(init_async(path, use_cache, language, None, no_llm=no_llm))
+            asyncio.run(parse_async(path, use_cache, language, None, no_llm=no_llm))
         else:
             with Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -256,15 +304,15 @@ def init(
             ) as progress:
                 # No describe bar in no-LLM mode since descriptions are skipped.
                 progress_tracker = ProgressTracker(progress, include_describe=not no_llm)
-                asyncio.run(init_async(path, use_cache, language, progress_tracker, no_llm=no_llm))
+                asyncio.run(parse_async(path, use_cache, language, progress_tracker, no_llm=no_llm))
                 progress_tracker.finish()
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
-    
+
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
-    typer.echo(f"✅ Finished initializing project in {elapsed_time:.4f} seconds.")
+    typer.echo(f"✅ Finished parsing project in {elapsed_time:.4f} seconds.")
 
 
 def _render_inspect(result: Union[InspectResult, str], pretty: bool = True, language: str = "java"):

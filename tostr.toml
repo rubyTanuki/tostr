@@ -1,0 +1,19 @@
+# tostr.toml — Tostr project configuration. Safe to commit.
+
+[project]
+# "auto" parses every supported language, routed per-file by extension.
+language = "auto"            # "auto" | "python" | "java" | ...
+
+[llm]
+# Description generation. "none" skips the LLM entirely (embeddings fall back to
+# code context); equivalent to the --no-llm flag.
+strategy = "gemini"         # "gemini" | "none"
+
+# [embedding]
+# Reserved / not yet enforced.
+# model = "all-MiniLM-L6-v2"
+
+# [graph]
+# Reserved / not yet implemented. Dependency-graph scoping.
+# include = []              # globs; empty = everything not excluded
+# exclude = []              # globs

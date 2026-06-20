@@ -27,7 +27,7 @@ def _deserialize_float32(blob) -> Optional[List[float]]:
     return list(_s.unpack(f"{len(blob) // 4}f", blob))
 
 class Registry:
-    def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None):
+    def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None, config: ProjectConfig = None):
         self.progress_tracker = progress_tracker
         self.project_path = project_path
         self.use_cache = use_cache
@@ -39,7 +39,9 @@ class Registry:
         self._resolving_logicals: Set[str] = set()
         self.root: Optional[BaseStruct] = None
         self.db = db
-        self.config = ProjectConfig(project_path) if project_path else None
+        # A caller (e.g. parse) can inject a ProjectConfig carrying per-invocation overrides; else
+        # build one from the project root so on-disk tostr.toml / .tostrignore still apply.
+        self.config = config or (ProjectConfig(project_path) if project_path else None)
         self._resolvers: Dict[Optional[str], BaseDependencyResolver] = {}
 
     def get_resolver(self, ext: str = "") -> BaseDependencyResolver:

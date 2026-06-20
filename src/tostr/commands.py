@@ -11,8 +11,7 @@ from functools import lru_cache
 from tostr.semantic.llm import LLMClient, GeminiStrategy
 from tostr.semantic.embeddings import EmbeddingClient, EmbeddingStrategy, OnnxEmbeddingStrategy
 from tostr.core import Registry, tost, InspectResult, SkeletonResult, SearchResult, BaseParser, SQLiteCache, BaseCodeStruct
-from tostr.core.context.config import ProjectConfig
-from tostr.core.providers import LanguageProvider
+from tostr.core.context.config import ProjectConfig, default_ignore_text
 
 from tostr.core.cache_version import incompatibility_reason, read_db_version
 from tostr.exceptions import APIKeyError, DatabaseNotFoundError, CacheFormatError
@@ -28,13 +27,13 @@ def _verify_db_exists(target_path: Path):
     db_path = Path(target_path) / ".tostr" / "cache.db"
     if not db_path.exists():
         raise DatabaseNotFoundError(
-            f"No Tostr database found at {db_path}. Run 'tostr init' first."
+            f"No Tostr database found at {db_path}. Run 'tostr parse' first."
         )
     reason = incompatibility_reason(read_db_version(db_path))
     if reason:
         raise CacheFormatError(
             f"Tostr cache at {db_path} is incompatible with this version ({reason}). "
-            f"Run 'tostr init' to rebuild it."
+            f"Run 'tostr parse' to rebuild it."
         )
 
 def get_llm_client(progress_tracker: "ProgressTracker" = None):
@@ -54,17 +53,21 @@ def get_cached_embedding_client(progress_tracker: "ProgressTracker" = None):
     strategy = OnnxEmbeddingStrategy()
     return EmbeddingClient(strategy=strategy, progress_tracker=progress_tracker)
 
-def clean_db(target_path: Path):
+def clean_db(target_path: Path, purge: bool = False):
+    """Remove generated state. By default this wipes only `.tostr/` (the disposable cache/logs);
+    authored config (`tostr.toml`, `.tostrignore`) is the user's source of truth and is left intact.
+    `purge=True` opts into deleting that authored config too, for a full reset."""
     if os.path.exists(target_path / ".tostr"):
         shutil.rmtree(target_path / ".tostr")
         logger.info("Database cleaned.")
     else:
         logger.warning("No database found to clean.")
-    
-    ignore_file = target_path / ".tostrignore"
-    if ignore_file.exists():
-        ignore_file.unlink()
-        logger.info(f"Deleted {ignore_file}")
+
+    if purge:
+        for authored in (target_path / "tostr.toml", target_path / ".tostrignore"):
+            if authored.exists():
+                authored.unlink()
+                logger.info(f"Purged {authored}")
 
 def get_status(target_path: Path) -> dict:
     db_path = target_path / ".tostr" / "cache.db"
@@ -91,48 +94,114 @@ def get_status(target_path: Path) -> dict:
 
     return status
 
-async def _build_ast_async(target_path: Path, use_cache: bool = True, progress_tracker: "ProgressTracker" = None, no_llm: bool = False) -> BaseParser:
+async def _build_ast_async(target_path: Path, config: ProjectConfig, use_cache: bool = True, progress_tracker: "ProgressTracker" = None, no_llm: bool = False) -> BaseParser:
     llm = None if no_llm else get_llm_client(progress_tracker=progress_tracker)
     embedder = get_cached_embedding_client(progress_tracker=progress_tracker)
     db = SQLiteCache(target_path / ".tostr" / "cache.db")
-    registry = Registry(use_cache=use_cache, db=db, project_path=target_path, progress_tracker=progress_tracker)
+    registry = Registry(use_cache=use_cache, db=db, project_path=target_path, progress_tracker=progress_tracker, config=config)
     logger.info("Building AST...")
-    
+
     parser = BaseParser(target_path, llm, embedder, registry)
     logger.info("Parsing files...")
     await parser.parse()
     logger.success("✅ Parsed files")
     return parser
 
-def _write_default_ignore(target_path: Path, ignore_type: str):
-    base_path = Path(__file__).parent / "languages"
-    if ignore_type == "default":
-        template_path = base_path / "default.tostrignore"
-    else:
-        template_path = base_path / ignore_type / "default.tostrignore"
-    
-    if template_path.exists():
-        ignore_file = target_path / ".tostrignore"
-        with open(template_path, 'r') as f:
-            content = f.read()
-        
-        mode = 'a' if ignore_file.exists() else 'w'
-        with open(ignore_file, mode) as f:
-            if mode == 'a':
-                f.write("\n")
-            f.write(content)
-        logger.info(f"Written default ignore for {ignore_type} to {ignore_file}")
-    else:
-        logger.warning(f"No default ignore template found for {ignore_type} at {template_path}")
 
-async def init_async(target_path: Path, use_cache: bool = True, language: str = "auto", progress_tracker: "ProgressTracker" = None, no_llm: bool = False):
-    """Core asynchronous logic for scraping and parsing.
+# Default `tostr.toml` scaffold. Only [project].language and [llm].strategy are wired into behavior
+# today; [embedding] and [graph] are documented (commented) so the file shows the roadmap without
+# shipping settings that silently do nothing.
+DEFAULT_TOSTR_TOML = '''\
+# tostr.toml — Tostr project configuration. Safe to commit.
 
-    language="auto" (the default) parses every supported language, routing builders and
-    resolvers per-file by extension. Passing an explicit language restricts parsing to it.
+[project]
+# "auto" parses every supported language, routed per-file by extension.
+language = "auto"            # "auto" | "python" | "java" | ...
+
+[llm]
+# Description generation. "none" skips the LLM entirely (embeddings fall back to
+# code context); equivalent to the --no-llm flag.
+strategy = "gemini"         # "gemini" | "none"
+
+# [embedding]
+# Reserved / not yet enforced.
+# model = "all-MiniLM-L6-v2"
+
+# [graph]
+# Reserved / not yet implemented. Dependency-graph scoping.
+# include = []              # globs; empty = everything not excluded
+# exclude = []              # globs
+'''
+
+
+def init_project(target_path: Path, force: bool = False) -> list[str]:
+    """Scaffold the project's authored files so the user has something concrete to edit. Does NOT
+    parse, build the cache, or need an API key. Never clobbers an existing authored file unless
+    `force=True`, so it is safe to run repeatedly. Returns human-readable lines describing what
+    happened for the caller to report."""
+    report: list[str] = []
+
+    # Generated-state home: created empty here; parse fills it.
+    tostr_dir = target_path / ".tostr"
+    tostr_dir.mkdir(exist_ok=True)
+    report.append(f"Ensured {tostr_dir}/")
+
+    # tostr.toml (authored, committed)
+    toml_path = target_path / "tostr.toml"
+    if toml_path.exists() and not force:
+        report.append(f"Skipped {toml_path.name} (already exists; use --force to overwrite)")
+    else:
+        toml_path.write_text(DEFAULT_TOSTR_TOML)
+        report.append(f"Wrote {toml_path.name}")
+
+    # .tostrignore (authored, committed) — materialize the bundled defaults for the configured
+    # language so the user can see and edit the rules ProjectConfig would otherwise apply in-code.
+    config = ProjectConfig(target_path)
+    ignore_path = target_path / ".tostrignore"
+    if ignore_path.exists() and not force:
+        report.append(f"Skipped {ignore_path.name} (already exists; use --force to overwrite)")
+    else:
+        ignore_path.write_text(default_ignore_text(config.language))
+        report.append(f"Wrote {ignore_path.name}")
+
+    # Keep generated state out of version control.
+    report.append(_append_gitignore(target_path))
+    return report
+
+
+def _append_gitignore(target_path: Path) -> str:
+    """Ensure `.tostr/` is gitignored. Idempotent.
+
+    If a `.gitignore` already exists, append the entry. If it doesn't, only create one when this is
+    actually a git repo (where keeping the generated cache untracked matters — including a freshly
+    `git init`'d project that has no `.gitignore` yet). Outside a repo there's nothing for a
+    `.gitignore` to do, so we skip it rather than litter the directory with one."""
+    gitignore = target_path / ".gitignore"
+    entry = ".tostr/"
+
+    if gitignore.exists():
+        existing = gitignore.read_text()
+        if any(line.strip() == entry for line in existing.splitlines()):
+            return f"{gitignore.name} already ignores {entry}"
+        prefix = "" if (existing == "" or existing.endswith("\n")) else "\n"
+        with open(gitignore, "a") as f:
+            f.write(f"{prefix}{entry}\n")
+        return f"Added {entry} to {gitignore.name}"
+
+    if (target_path / ".git").exists():
+        gitignore.write_text(f"{entry}\n")
+        return f"Created {gitignore.name} ignoring {entry}"
+
+    return "Skipped .gitignore (not a git repo)"
+
+
+async def parse_async(target_path: Path, use_cache: bool = True, language: str | None = None, progress_tracker: "ProgressTracker" = None, no_llm: bool = False):
+    """Build the cache: parse the AST, resolve dependencies, describe, embed, write `.tostr/cache.db`.
+
+    Reads configuration via ProjectConfig and authors nothing — no tostr.toml or .tostrignore is
+    created. `language` is a per-invocation override (None = use tostr.toml, defaulting to "auto",
+    which parses every supported language). CLI flags override config for this invocation only.
     """
-
-    # Ensure .tostr directory exists
     tostr_dir = target_path / ".tostr"
     tostr_dir.mkdir(exist_ok=True)
 
@@ -144,23 +213,15 @@ async def init_async(target_path: Path, use_cache: bool = True, language: str = 
         for p in (db_path, db_path.with_name("cache.db-wal"), db_path.with_name("cache.db-shm")):
             p.unlink(missing_ok=True)
 
-    # Save language to config.toml
-    config_path = tostr_dir / "config.toml"
-    config_content = f"[project]\nlanguage = \"{language}\"\n"
-    with open(config_path, 'w') as f:
-        f.write(config_content)
+    overrides = {"language": language} if language else None
+    config = ProjectConfig(target_path, overrides=overrides)
 
-    # Write default ignores. In auto mode, lay down every supported language's
-    # ignore template so things like venv/ (python) and target/ (java) are covered.
-    if language == "auto":
-        for lang in LanguageProvider.language_map:
-            _write_default_ignore(target_path, lang)
-    else:
-        _write_default_ignore(target_path, language)
+    # config-level LLM opt-out (llm.strategy = "none") is equivalent to the --no-llm flag.
+    no_llm = no_llm or config.llm_strategy == "none"
 
     # Parse and resolve AST
-    parser = await _build_ast_async(target_path, use_cache=use_cache, progress_tracker=progress_tracker, no_llm=no_llm)
-        
+    parser = await _build_ast_async(target_path, config, use_cache=use_cache, progress_tracker=progress_tracker, no_llm=no_llm)
+
     # Write Cache
     parser.registry.save_to_cache()
 
