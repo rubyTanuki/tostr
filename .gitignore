@@ -220,4 +220,3 @@ tests/testcode/*
 
 # Tostr generated artifacts
 .tostr/
-.tostrignore
