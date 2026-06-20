@@ -416,20 +416,28 @@ class Registry:
                 conn.executemany("INSERT INTO edges (source_id, target_id, edge_type) VALUES (?, ?, ?)", edges)
             conn.commit()
 
-    def carry_over_unchanged(self, path_str: str) -> int:
-        """Before (re)describing a reparsed file, reuse cached descriptions + vectors for any struct
-        whose body is unchanged (its freshly-computed `diff_hash` matches the stored row). The
-        describer skips LLM generation when `description` is already set, and the embedder skips when
-        `vector` is set — so populating these here means only *changed* or *new* members pay the
-        expensive regeneration cost. A leaf method's hash is its own body; a class/file hash covers
-        all nested text, so an edited method correctly forces its class and file to regenerate while
-        untouched siblings are carried over. Returns the number of structs carried over."""
+    def carry_over_unchanged(self, path_str: Optional[str] = None) -> int:
+        """Reuse cached descriptions + vectors for any struct whose body is unchanged (its
+        freshly-computed `diff_hash` matches the stored row), so only *changed* or *new* members pay
+        the expensive regeneration cost. The describer skips LLM generation when `description` is
+        already set, and the embedder skips when `vector` is set. A leaf method's hash is its own
+        body; a class/file hash covers all nested text, so an edited method correctly forces its
+        class and file to regenerate while untouched siblings are carried over.
+
+        `path_str` scopes the lookup to one reparsed file (the watcher's incremental path); pass
+        None to carry over across the *entire* prior cache, which is what a full `tostr parse` does
+        so an unchanged project isn't re-described from scratch. Returns the number carried over."""
         if not self.db:
             return 0
         with self.db.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT id, uid, diff_hash, description FROM structs WHERE path = ?", (path_str,)
-            ).fetchall()
+            if path_str is None:
+                rows = conn.execute(
+                    "SELECT id, uid, diff_hash, description FROM structs"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, uid, diff_hash, description FROM structs WHERE path = ?", (path_str,)
+                ).fetchall()
             prev: Dict[str, dict] = {}
             id_to_uid: Dict[str, str] = {}
             for r in rows:
@@ -458,7 +466,8 @@ class Registry:
                 struct.vector = p["vector"]
             carried += 1
         if carried:
-            logger.debug(f"Carried over {carried} unchanged struct description(s)/vector(s) under '{path_str}'")
+            scope = f"under '{path_str}'" if path_str is not None else "across the project"
+            logger.debug(f"Carried over {carried} unchanged struct description(s)/vector(s) {scope}")
         return carried
 
     def struct_exists(self, uid: str) -> bool:
