@@ -33,6 +33,12 @@ class BaseParser(ABC):
         # always run it; files in languages without a resolver are simply skipped.
         self.resolve_dependencies()
 
+        # Reuse descriptions/vectors from the prior cache for structs whose body is unchanged, so a
+        # full reparse only regenerates what actually changed instead of re-describing the whole
+        # project. Skipped under --no-cache (use_cache=False), which forces a from-scratch rebuild.
+        if self.registry.use_cache:
+            self.registry.carry_over_unchanged()
+
         await self.resolve_descriptions_async()
         
     def parse_path(self, subpath: Path, parent: Directory = None):
