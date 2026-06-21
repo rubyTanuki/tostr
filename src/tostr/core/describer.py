@@ -53,11 +53,44 @@ class NoLLMDescriber(_DescriberBase):
 
 
 class LLMDescriber(_DescriberBase):
-    def __init__(self, llm: LLMClient, embedder: EmbeddingClient):
+    def __init__(self, llm: LLMClient, embedder: EmbeddingClient, lockfile: dict | None = None):
         self.llm = llm
         self.embedder = embedder
+        # {uid: {"diff_hash", "description", "vector"?}} loaded from the committed tostr.lock.json.
+        # Consulted per-struct as the second description source (after the live cache, before the
+        # LLM) so a cold clone reuses a teammate's descriptions instead of paying for regeneration.
+        self.lockfile = lockfile or {}
+
+    def _seed_from_lockfile(self, struct: BaseStruct) -> bool:
+        """Reuse a committed description (and vector, when the lockfile was exported with vectors)
+        for a struct whose body is unchanged since the lockfile was written. This is the second
+        reuse source, consulted right here in the describe pass: it only fills a struct that has no
+        description yet (so a live-cache hit from carry_over_unchanged wins) and only when the
+        lockfile entry's diff_hash matches the freshly-parsed struct's (so a changed body falls
+        through to regeneration — self-healing). Returns True when a description was seeded, so the
+        caller can treat the struct as already described and skip the LLM call."""
+        if struct.description or not getattr(struct, "diff_hash", ""):
+            return False
+        entry = self.lockfile.get(struct.uid)
+        if not entry or entry.get("diff_hash") != struct.diff_hash:
+            return False
+        desc = entry.get("description", "")
+        if desc.startswith("[STALE] "):  # defensive: never seed a stale marker
+            desc = desc[len("[STALE] "):]
+        if not desc:
+            return False
+        struct.description = desc
+        vector = entry.get("vector")
+        if vector is not None and struct.vector is None:
+            struct.vector = vector
+        return True
 
     async def describe(self, struct: BaseStruct):
+        # Second reuse source (after the live cache): fill this struct's description from the lockfile
+        # before dispatch, so the already-described early-exit below skips the LLM call for a hit.
+        # Methods aren't routed through here (their parent batches them), so they're seeded in
+        # _describe_file / _describe_class instead.
+        self._seed_from_lockfile(struct)
         if isinstance(struct, Directory):
             await self._describe_directory(struct)
         elif isinstance(struct, BaseFile):
@@ -111,6 +144,12 @@ class LLMDescriber(_DescriberBase):
         logger.debug(f"Successfully Generated Description for directory {directory.uid}")
 
     async def _describe_file(self, file: BaseFile):
+        # Seed methods from the lockfile up front (they aren't routed through describe()) so the
+        # branches below — both the already-described early-exit and the LLM batch's method_lookup —
+        # see their reused descriptions and never regenerate an unchanged method.
+        for m in file.methods:
+            self._seed_from_lockfile(m)
+
         # Recurse on non-method children (classes) first so their descriptions are ready
         non_methods = [c for c in file.all_children if not isinstance(c, BaseMethod)]
         if non_methods:
@@ -187,6 +226,11 @@ class LLMDescriber(_DescriberBase):
         logger.debug(f"Successfully Generated Description for file {file.uid}")
 
     async def _describe_class(self, cls: BaseClass):
+        # Seed methods from the lockfile up front (see _describe_file) so unchanged methods reuse
+        # their committed descriptions instead of being regenerated.
+        for m in cls.methods:
+            self._seed_from_lockfile(m)
+
         # Recurse on nested classes before describing this one
         non_methods = [c for c in cls.all_children if not isinstance(c, BaseMethod)]
         if non_methods:

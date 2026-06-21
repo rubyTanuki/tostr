@@ -12,6 +12,7 @@ from tostr.core.db import SQLiteCache
 from tostr.core.builders import BaseBuilder
 from tostr.core.context.config import ProjectConfig
 from tostr.core.resolver import BaseDependencyResolver
+from tostr.core import lockfile
 
 if TYPE_CHECKING:
     from tostr.core.models import BaseStruct, BaseCodeStruct
@@ -27,10 +28,13 @@ def _deserialize_float32(blob) -> Optional[List[float]]:
     return list(_s.unpack(f"{len(blob) // 4}f", blob))
 
 class Registry:
-    def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None, config: ProjectConfig = None):
+    def __init__(self, use_cache: bool = True, db: SQLiteCache = None, project_path: Path = None, progress_tracker: "ProgressTracker" = None, config: ProjectConfig = None, use_lockfile: bool = True):
         self.progress_tracker = progress_tracker
         self.project_path = project_path
         self.use_cache = use_cache
+        # When True (default), apply_lockfile() seeds descriptions from a committed tostr.lock.json.
+        # A future --no-lockfile escape hatch flips this off; seeding is on by default.
+        self.use_lockfile = use_lockfile
         self.uid_map: Dict[str, BaseStruct] = {}
         self.id_map: Dict[str, BaseStruct] = {}
         self.missing_uids: Set[str] = set()
@@ -469,6 +473,61 @@ class Registry:
             scope = f"under '{path_str}'" if path_str is not None else "across the project"
             logger.debug(f"Carried over {carried} unchanged struct description(s)/vector(s) {scope}")
         return carried
+
+    def collect_descriptions(self, with_vectors: bool = False) -> Dict[str, dict]:
+        """Read every struct carrying a usable description from the cache into a
+        `{uid: {diff_hash, description, vector?}}` map for the lockfile exporter. The `(uid,
+        diff_hash)` shape mirrors what `carry_over_unchanged` / the describer's lockfile seed consume,
+        so an exported entry is reused only while the body is unchanged. Empty and `[STALE] `
+        descriptions are excluded — never export a description that's blank or known-stale. Vectors
+        are included only when `with_vectors` is set (otherwise the consumer re-embeds locally for
+        free). Sibling of `carry_over_unchanged`: this is the read half of the lockfile round-trip,
+        kept here with the rest of the struct-table SQL rather than in the command layer."""
+        if not self.db:
+            return {}
+        entries: Dict[str, dict] = {}
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, uid, diff_hash, description FROM structs "
+                "WHERE description IS NOT NULL AND description != ''"
+            ).fetchall()
+
+            id_to_uid: Dict[str, str] = {}
+            for row in rows:
+                description = row["description"]
+                if description.startswith("[STALE] "):
+                    continue
+                uid = row["uid"]
+                entries[uid] = {"diff_hash": row["diff_hash"] or "", "description": description}
+                id_to_uid[str(row["id"])] = uid
+
+            if with_vectors and id_to_uid:
+                placeholders = ",".join("?" * len(id_to_uid))
+                for struct_id, vector in conn.execute(
+                    f"SELECT struct_id, vector FROM vec_structs WHERE struct_id IN ({placeholders})",
+                    list(id_to_uid),
+                ).fetchall():
+                    uid = id_to_uid.get(str(struct_id))
+                    deserialized = _deserialize_float32(vector)
+                    if uid and deserialized is not None:
+                        entries[uid]["vector"] = deserialized
+        return entries
+
+    def load_lockfile_lookup(self) -> Dict[str, dict]:
+        """Load the committed `tostr.lock.json` into an in-memory `{uid: {diff_hash, description,
+        vector?}}` lookup for the describer to consult as a *second* description source — after the
+        live cache (`carry_over_unchanged`) and before the LLM. Returns `{}` when seeding is disabled
+        (`use_lockfile` False) or no usable lockfile exists. Format parsing/validation lives in the
+        `lockfile` module; the describer does the per-struct `(uid, diff_hash)` match (see
+        `_seed_from_lockfile`) so an entry is reused only when the body is unchanged and the struct
+        has no description yet."""
+        if not self.use_lockfile or not self.project_path:
+            return {}
+        entries = lockfile.read(self.project_path)
+        if not entries:
+            return {}
+        logger.debug(f"Loaded {len(entries)} lockfile entr(ies) from {lockfile.LOCKFILE_NAME}")
+        return entries
 
     def struct_exists(self, uid: str) -> bool:
         """Cheap existence check (in-memory first, then DB) — avoids the heavy hydration that
