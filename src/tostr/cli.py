@@ -20,7 +20,8 @@ from tostr.commands import (
     watch_async,
     clean_db,
     search_async,
-    get_status
+    get_status,
+    export_lockfile,
 )
 
 from tostr.server import mcp
@@ -201,6 +202,47 @@ def clean(
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)
         raise typer.Exit(code=1)
+
+@app.command()
+def export(
+    path: Path = typer.Argument(
+        ".",
+        help="Path to the project directory to export",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True
+    ),
+    with_vectors: Annotated[
+        bool,
+        typer.Option(
+            "--with-vectors",
+            help="Also export embedding vectors (literal zero recompute, but a larger, merge-noisy file). Off by default — vectors recompute for free from the local model."
+        )
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug/--no-debug",
+            "-d/-nd",
+            help="Enable debug logging"
+            )
+    ] = False
+):
+    """Snapshot descriptions to tostr.lock.json for version control, so teammates can seed them on a cold clone instead of re-calling the LLM. Requires an existing cache (run 'tostr parse' first)."""
+    configure_cli_logging(debug)
+    try:
+        report = export_lockfile(path, with_vectors=with_vectors)
+    except TostrError as e:
+        typer.secho(f"❌ Error: {e}", fg="red", err=True)
+        raise typer.Exit(code=1)
+
+    name = Path(report["path"]).name
+    if report["changed"]:
+        typer.secho(f"✅ Wrote {name} ({report['entries_written']} descriptions)", fg="green")
+    else:
+        typer.secho(f"{name} already up to date", fg="yellow")
+
 
 @app.command()
 def init(

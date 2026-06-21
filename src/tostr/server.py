@@ -20,7 +20,8 @@ from tostr.commands import (
     skeleton_async,
     watch_async,
     clean_db,
-    search_async
+    search_async,
+    export_lockfile,
 )
 from tostr.core import InspectResult, SkeletonResult, SearchResult
 from tostr.core.utils.logger import configure_mcp_logging
@@ -335,6 +336,29 @@ async def clean(workspace_path: str, purge: bool = False) -> str:
         watchers.stop(project_dir)
         clean_db(project_dir, purge=purge)
         return f"Success: cleaned {project_dir}." + (" Authored config purged." if purge else "")
+    except Exception as e:
+        return f"Error: {e}"
+
+@mcp.tool()
+async def export(workspace_path: str, with_vectors: bool = False) -> str:
+    """
+    Snapshot the project's LLM-generated descriptions to a committed tostr.lock.json so teammates
+    cloning the repo seed descriptions from it (matched on content hash) instead of re-calling the
+    LLM. Requires an existing cache — call `parse` first. The next `parse` on a cold clone reuses
+    these descriptions automatically.
+
+    Args:
+        workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths.
+        with_vectors: Also export embedding vectors for literal zero recompute (larger, merge-noisy file). Off by default; vectors recompute for free locally.
+    """
+    try:
+        target_path = _resolve_workspace(workspace_path)
+        configure_mcp_logging(target_path)
+        report = export_lockfile(target_path, with_vectors=with_vectors)
+        name = Path(report["path"]).name
+        if report["changed"]:
+            return f"Success: wrote {name} ({report['entries_written']} descriptions) at {report['path']}."
+        return f"Success: {name} already up to date ({report['entries_written']} descriptions)."
     except Exception as e:
         return f"Error: {e}"
 
