@@ -138,7 +138,10 @@ class BaseParser(ABC):
                 # No-LLM mode: skip descriptions, embed on code context only.
                 describer = NoLLMDescriber(self.embedder)
             else:
-                describer = LLMDescriber(self.llm, self.embedder)
+                # Load the committed lockfile once and hand it to the describer as the second
+                # description source (after the live cache, before the LLM) — see apply order in
+                # parse(): carry_over_unchanged runs first, then this fills the rest on a cold clone.
+                describer = LLMDescriber(self.llm, self.embedder, lockfile=self.registry.load_lockfile_lookup())
             await describer.describe(self.registry.root)
 
         await self.embedder.drain_and_stop()

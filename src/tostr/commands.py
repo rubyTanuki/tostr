@@ -11,6 +11,7 @@ from functools import lru_cache
 from tostr.semantic.llm import LLMClient, GeminiStrategy
 from tostr.semantic.embeddings import EmbeddingClient, EmbeddingStrategy, OnnxEmbeddingStrategy
 from tostr.core import Registry, tost, InspectResult, SkeletonResult, SearchResult, BaseParser, SQLiteCache, BaseCodeStruct
+from tostr.core import lockfile
 from tostr.core.context.config import ProjectConfig, default_ignore_text
 
 from tostr.core.cache_version import incompatibility_reason, read_db_version
@@ -68,6 +69,23 @@ def clean_db(target_path: Path, purge: bool = False):
             if authored.exists():
                 authored.unlink()
                 logger.info(f"Purged {authored}")
+
+def export_lockfile(target_path: Path, with_vectors: bool = False) -> dict:
+    """Snapshot the cache's descriptions to `<project_root>/tostr.lock.json` for version control, so
+    teammates on a cold clone can seed descriptions instead of re-calling the LLM. Orchestration
+    only: the Registry gathers the exportable entries from the cache (`collect_descriptions`) and the
+    `lockfile` module owns the on-disk format (deterministic, version-stamped, no-op-aware write).
+    Only descriptions are exported by default; `with_vectors=True` also exports vectors for literal
+    zero recompute at the cost of a larger, merge-noisy file. Returns {path, entries_written,
+    changed}."""
+    _verify_db_exists(target_path)
+    db = SQLiteCache(target_path / ".tostr" / "cache.db")
+    registry = Registry(db=db, use_cache=True, project_path=target_path)
+
+    entries = registry.collect_descriptions(with_vectors=with_vectors)
+    changed = lockfile.write(target_path, entries)
+
+    return {"path": str(lockfile.path_for(target_path)), "entries_written": len(entries), "changed": changed}
 
 def get_status(target_path: Path) -> dict:
     db_path = target_path / ".tostr" / "cache.db"
