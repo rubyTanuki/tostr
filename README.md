@@ -140,6 +140,7 @@ Tostr separates **authoring configuration** from **building the cache**:
 
 - **`tostr.toml`** (project root, committed) holds your project settings, and **`.tostrignore`** (project root, committed) holds your ignore rules. These are *yours* — you edit them and they survive any cache wipe.
 - **`.tostr/`** (hidden, gitignored) is generated and disposable. `tostr parse` rebuilds it from scratch; `tostr clean` removes it.
+- **`tostr.lock.json`** (project root, *generated-but-committed*) is an optional third category — the AST equivalent of a `package-lock.json`. You produce it with `tostr export`, commit it, and it lets a teammate's first `tostr parse` reuse your LLM-generated descriptions instead of paying to regenerate them. See [`tostr export`](#tostr-export) below.
 
 ### `tostr init` — scaffold project files (optional)
 
@@ -169,6 +170,8 @@ The `--language` flag overrides the configured language for this run only. If om
 > Tostr currently supports `.java` and `.py`, so the options for `--language` are `java` and `python`.
 
 If you are running tostr on a project that already has an existing database but you want to reparse from the start, use the `--no-cache` flag.
+
+If a committed `tostr.lock.json` is present (see [`tostr export`](#tostr-export)), `parse` automatically **seeds** descriptions from it: for any struct whose code is unchanged since the lockfile was written (matched on a content hash), it reuses the committed description instead of calling the LLM, then re-embeds locally for free. This is what lets a teammate run `git clone && tostr parse` and get the shared descriptions without an API key for the unchanged majority of the code — only genuinely new or changed code hits the LLM.
 
 **Available Flags**:
 - `--use-cache`, `--no-cache`: Load the existing cache if it exists (use `--no-cache` to force a full reparse from scratch). Default is `True`
@@ -255,6 +258,19 @@ tostr clean .
 ```
 **Available Flags**:
 - `--purge`: Also delete authored config (`tostr.toml`, `.tostrignore`), not just the generated `.tostr/` cache. Default is `False`
+- `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
+
+### `tostr export`
+Snapshot the project's LLM-generated descriptions into a committed `tostr.lock.json` so teammates can reuse them instead of re-calling the LLM. Run it after a `tostr parse` produces descriptions, then commit the lockfile alongside your code:
+```
+tostr export .
+```
+On a teammate's machine, `git clone && tostr parse` then seeds those descriptions for free — every struct whose code hasn't changed (matched on a content hash) reuses your description and only re-embeds locally; no API key is needed for the unchanged majority. If the code has diverged, the affected structs simply regenerate, so a stale lockfile is self-healing.
+
+The lockfile is **only** written by this command — `parse` reads it but never rewrites it, so running `parse` (or the live watcher) never dirties your git tree. Re-run `tostr export` whenever you want to refresh the committed descriptions. By default only descriptions are exported (vectors recompute for free from the local model); pass `--with-vectors` for literal zero recompute at the cost of a larger, merge-noisier file.
+
+**Available Flags**:
+- `--with-vectors`: Also export embedding vectors, not just descriptions. Off by default. Default is `False`
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
 ### `tostr start-mcp`
