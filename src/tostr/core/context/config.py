@@ -87,8 +87,19 @@ class ProjectConfig:
 
     @property
     def llm_strategy(self) -> str:
+        # Resolution order: per-invocation override (--llm) > tostr.toml [llm].strategy > "gemini".
         # "none" disables LLM description generation (equivalent to --no-llm).
+        if self.overrides.get("llm"):
+            return self.overrides["llm"]
         return self.toml_config.get("llm", {}).get("strategy", "gemini")
+
+    @property
+    def llm_options(self) -> Dict:
+        # Provider-specific settings from the [llm] table (e.g. model, base_url), excluding the
+        # strategy selector itself. Passed through to the chosen strategy's constructor.
+        options = dict(self.toml_config.get("llm", {}))
+        options.pop("strategy", None)
+        return options
 
     def _init_toml_config(self, project_path: Path) -> Dict:
         # Authored config now lives at the project root (tostr.toml), not inside generated .tostr/.

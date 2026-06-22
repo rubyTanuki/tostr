@@ -7,6 +7,10 @@ class TostrError(Exception):
 class APIKeyError(TostrError):
     pass
 
+class ConfigError(TostrError):
+    """Invalid or unresolvable configuration (e.g. an unknown [llm].strategy)."""
+    pass
+
 class DatabaseNotFoundError(TostrError):
     pass
 
