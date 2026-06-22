@@ -313,9 +313,16 @@ def parse(
         bool,
         typer.Option(
             "--no-llm",
-            help="Skip LLM-generated descriptions (no API key required). Embeddings fall back to code context."
+            help="Skip LLM-generated descriptions (no API key required); equivalent to --llm none. Embeddings still run, falling back to code context."
         )
     ] = False,
+    llm: Annotated[
+        str,
+        typer.Option(
+            "--llm",
+            help="Override the LLM strategy for this run (e.g., 'gemini', 'ollama', or 'none' to disable). Trumps tostr.toml [llm].strategy. Resolution: --llm > tostr.toml > gemini default."
+        )
+    ] = None,
     debug: Annotated[
         bool,
         typer.Option(
@@ -336,7 +343,7 @@ def parse(
     typer.echo(f"Parsing and describing files...")
     try:
         if debug:
-            asyncio.run(parse_async(path, use_cache, language, None, no_llm=no_llm))
+            asyncio.run(parse_async(path, use_cache, language, None, no_llm=no_llm, llm=llm))
         else:
             with Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -346,7 +353,7 @@ def parse(
             ) as progress:
                 # No describe bar in no-LLM mode since descriptions are skipped.
                 progress_tracker = ProgressTracker(progress, include_describe=not no_llm)
-                asyncio.run(parse_async(path, use_cache, language, progress_tracker, no_llm=no_llm))
+                asyncio.run(parse_async(path, use_cache, language, progress_tracker, no_llm=no_llm, llm=llm))
                 progress_tracker.finish()
     except TostrError as e:
         typer.secho(f"❌ Error: {e}", fg="red", err=True)

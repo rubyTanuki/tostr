@@ -8,14 +8,14 @@ from watchfiles import awatch, Change
 from loguru import logger
 from functools import lru_cache
 
-from tostr.semantic.llm import LLMClient, GeminiStrategy
+from tostr.semantic.llm import LLMClient
 from tostr.semantic.embeddings import EmbeddingClient, EmbeddingStrategy, OnnxEmbeddingStrategy
 from tostr.core import Registry, tost, InspectResult, SkeletonResult, SearchResult, BaseParser, SQLiteCache, BaseCodeStruct
 from tostr.core import lockfile
 from tostr.core.context.config import ProjectConfig, default_ignore_text
 
 from tostr.core.cache_version import incompatibility_reason, read_db_version
-from tostr.exceptions import APIKeyError, DatabaseNotFoundError, CacheFormatError
+from tostr.exceptions import TostrError, APIKeyError, DatabaseNotFoundError, CacheFormatError
 
 def _verify_db_exists(target_path: Path):
     """Ensure an initialized Tostr database exists for the given project path.
@@ -37,13 +37,12 @@ def _verify_db_exists(target_path: Path):
             f"Run 'tostr parse' to rebuild it."
         )
 
-def get_llm_client(progress_tracker: "ProgressTracker" = None):
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    if GEMINI_API_KEY is None:
-        raise APIKeyError("API key not found.")
-    
-    strategy = GeminiStrategy(api_key=GEMINI_API_KEY)
-    return LLMClient(strategy=strategy, progress_tracker=progress_tracker)
+def get_llm_client(config: ProjectConfig, progress_tracker: "ProgressTracker" = None):
+    """Build the LLM client for the strategy resolved from `config`, or None when LLM generation
+    is disabled (strategy "none"). Resolution and construction live in providers.LLMProvider:
+    --llm override > tostr.toml [llm].strategy > gemini default."""
+    from tostr.core.providers import LLMProvider
+    return LLMProvider.build_client(config, progress_tracker=progress_tracker)
 
 @lru_cache(maxsize=1)
 def get_cached_embedding_client(progress_tracker: "ProgressTracker" = None):
@@ -113,7 +112,7 @@ def get_status(target_path: Path) -> dict:
     return status
 
 async def _build_ast_async(target_path: Path, config: ProjectConfig, use_cache: bool = True, progress_tracker: "ProgressTracker" = None, no_llm: bool = False) -> BaseParser:
-    llm = None if no_llm else get_llm_client(progress_tracker=progress_tracker)
+    llm = None if no_llm else get_llm_client(config, progress_tracker=progress_tracker)
     embedder = get_cached_embedding_client(progress_tracker=progress_tracker)
     db = SQLiteCache(target_path / ".tostr" / "cache.db")
     registry = Registry(use_cache=use_cache, db=db, project_path=target_path, progress_tracker=progress_tracker, config=config)
@@ -213,12 +212,14 @@ def _append_gitignore(target_path: Path) -> str:
     return "Skipped .gitignore (not a git repo)"
 
 
-async def parse_async(target_path: Path, use_cache: bool = True, language: str | None = None, progress_tracker: "ProgressTracker" = None, no_llm: bool = False):
+async def parse_async(target_path: Path, use_cache: bool = True, language: str | None = None, progress_tracker: "ProgressTracker" = None, no_llm: bool = False, llm: str | None = None):
     """Build the cache: parse the AST, resolve dependencies, describe, embed, write `.tostr/cache.db`.
 
     Reads configuration via ProjectConfig and authors nothing — no tostr.toml or .tostrignore is
     created. `language` is a per-invocation override (None = use tostr.toml, defaulting to "auto",
-    which parses every supported language). CLI flags override config for this invocation only.
+    which parses every supported language). `llm` is a per-invocation override of the LLM strategy
+    ("gemini"/"ollama"/"none"; None = use tostr.toml [llm].strategy, default "gemini"). CLI flags
+    override config for this invocation only.
     """
     tostr_dir = target_path / ".tostr"
     tostr_dir.mkdir(exist_ok=True)
@@ -231,8 +232,12 @@ async def parse_async(target_path: Path, use_cache: bool = True, language: str |
         for p in (db_path, db_path.with_name("cache.db-wal"), db_path.with_name("cache.db-shm")):
             p.unlink(missing_ok=True)
 
-    overrides = {"language": language} if language else None
-    config = ProjectConfig(target_path, overrides=overrides)
+    overrides = {}
+    if language:
+        overrides["language"] = language
+    if llm:
+        overrides["llm"] = llm
+    config = ProjectConfig(target_path, overrides=overrides or None)
 
     # config-level LLM opt-out (llm.strategy = "none") is equivalent to the --no-llm flag.
     no_llm = no_llm or config.llm_strategy == "none"
@@ -296,12 +301,12 @@ async def watch_async(target_path: Path, stop_event: asyncio.Event = None):
     # already-resolved paths that awatch emits; otherwise relative_to() below would raise.
     target_path = Path(target_path).resolve()
     _verify_db_exists(target_path)
-    try:
-        llm = get_llm_client()
-    except APIKeyError:
-        llm = None
-        logger.warning("No API key found; watcher running in no-LLM mode (embeddings only, descriptions skipped).")
     config = ProjectConfig(target_path)
+    try:
+        llm = get_llm_client(config)
+    except TostrError as e:
+        llm = None
+        logger.warning(f"LLM unavailable ({e}); watcher running in no-LLM mode (embeddings only, descriptions skipped).")
 
     # Single-writer lock for all DB mutations from this watcher. Created here so it binds to this
     # loop, and serializes the per-file write pipelines so a cancelled-but-in-flight thread write

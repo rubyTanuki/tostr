@@ -173,10 +173,15 @@ If you are running tostr on a project that already has an existing database but 
 
 If a committed `tostr.lock.json` is present (see [`tostr export`](#tostr-export)), `parse` automatically **seeds** descriptions from it: for any struct whose code is unchanged since the lockfile was written (matched on a content hash), it reuses the committed description instead of calling the LLM, then re-embeds locally for free. This is what lets a teammate run `git clone && tostr parse` and get the shared descriptions without an API key for the unchanged majority of the code — only genuinely new or changed code hits the LLM.
 
+The `--llm` flag selects which LLM strategy generates descriptions for this run only. Resolution is `--llm` > the strategy configured in `tostr.toml` > the `gemini` default. Gemini is the only built-in default and reads `GEMINI_API_KEY` from the environment; if that key is missing and no other strategy is configured, `parse` stops and tells you to configure a binding or set the key (use `--no-llm` to skip descriptions entirely). Pass `--llm ollama` to describe against a local [Ollama](https://ollama.com) model instead, or `--llm none` to disable description generation (equivalent to `--no-llm`).
+
+> Configuring a strategy's details (model name, host, etc.) is done per-strategy in `tostr.toml`; see the strategy configuration docs for the available keys.
+
 **Available Flags**:
 - `--use-cache`, `--no-cache`: Load the existing cache if it exists (use `--no-cache` to force a full reparse from scratch). Default is `True`
 - `--language`, `-l`: Override the configured language for this run (e.g., `java`, `python`). Omit to use `tostr.toml` (defaults to `auto`).
-- `--no-llm`: Skip LLM-generated descriptions (no API key required). Embeddings fall back to code context. Default is `False`
+- `--llm`: Override the LLM strategy for this run (`gemini`, `ollama`, or `none` to disable). Trumps `tostr.toml`. Omit to use the configured strategy (default `gemini`).
+- `--no-llm`: Skip LLM-generated descriptions (no API key required); equivalent to `--llm none`. Embeddings still run, falling back to code context. Default is `False`
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
 ## Traversing the graph
