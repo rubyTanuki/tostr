@@ -119,7 +119,7 @@ async def init(workspace_path: str, force: bool = False) -> str:
 
 
 @mcp.tool()
-async def parse(workspace_path: str, use_cache: bool = True, language: str = None, no_llm: bool = False) -> str:
+async def parse(workspace_path: str, use_cache: bool = True, language: str = None, no_llm: bool = False, llm: str = None) -> str:
     """
     -- BUILD STEP: run this before querying a project (skeleton/search/inspect) for the first time --
     Parse a project, build the AST + dependency graph + semantic embeddings, and write the cache to
@@ -134,7 +134,8 @@ async def parse(workspace_path: str, use_cache: bool = True, language: str = Non
         workspace_path: The ABSOLUTE path to the project workspace. DO NOT use '.' or relative paths. If you only have a relative path, you must determine the absolute path of the current workspace first.
         use_cache: Whether to use the existing AST cache. If False, forces a full re-parse.
         language: Restrict parsing to one language (e.g., 'java', 'python'). Omit to use the project's tostr.toml (defaults to 'auto', which parses every supported language, routed per-file by extension). Only pass an explicit language to deliberately exclude others.
-        no_llm: If True, skip LLM-generated descriptions entirely (no API key required). The AST, dependency graph, and semantic embeddings are still built; embeddings fall back to code context instead of descriptions.
+        no_llm: If True, skip LLM-generated descriptions entirely (no API key required); equivalent to llm='none'. The AST, dependency graph, and semantic embeddings are still built; embeddings fall back to code context instead of descriptions.
+        llm: Override the LLM strategy for this run (e.g., 'gemini', 'ollama', or 'none' to disable). Omit to use the project's tostr.toml [llm].strategy (default 'gemini'). Takes precedence over the config.
     """
     try:
         target_path = _resolve_workspace(workspace_path)
@@ -146,7 +147,7 @@ async def parse(workspace_path: str, use_cache: bool = True, language: str = Non
             watchers.start(target_path)
             return f"Success: Tostr synced with existing cache at {db_path}. Background watcher active on {target_path}."
 
-        await parse_async(target_path, use_cache, language, no_llm=no_llm)
+        await parse_async(target_path, use_cache, language, no_llm=no_llm, llm=llm)
         watchers.start(target_path)
         return f"Success: Tostr parsed and built the cache at {db_path}. Background watcher is now actively listening on {target_path}."
     except Exception as e:
