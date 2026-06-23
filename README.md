@@ -126,6 +126,20 @@ Most MCP-compatible agents use a JSON configuration file. You can generally add 
 
 > **Note**: If `tostr` is not in your system PATH, you may need to provide the absolute path to the executable (e.g., `/Users/YOUR_NAME/.local/bin/tostr`). You can find this path by running `which tostr` on macOS/Linux or `where tostr` on Windows.
 
+### Claude Code: one-line install
+
+If you're on Claude Code, skip the JSON entirely — paste this into your terminal and you're connected:
+
+```
+claude mcp add tostr --env GEMINI_API_KEY=YOUR_API_KEY_HERE -- tostr start-mcp
+```
+or even simpler, if you configure your projects to use no-llm:
+```
+claude mcp add tostr -- tostr start-mcp
+```
+
+That's it. Claude Code's CLI writes the config for you, no file editing required.
+
 ### Popular Agents with MCP Support
 Below are instructions and links for setting up MCP servers in common AI coding environments:
 
