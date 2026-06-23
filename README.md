@@ -138,7 +138,7 @@ or even simpler, if you configure your projects to use no-llm:
 claude mcp add tostr -- tostr start-mcp
 ```
 
-That's it. Claude Code's CLI writes the config for you, no file editing required.
+Claude Code's CLI writes the config for you, no file editing required.
 
 ### Popular Agents with MCP Support
 Below are instructions and links for setting up MCP servers in common AI coding environments:
@@ -253,6 +253,7 @@ tostr search "PID controller"
 ```
 <img src="./resources/search_example.png" alt="Search Example" width="860">
 
+> Tostr uses the llm described descriptions instead of source code for its vector embeddings, avoiding one of the major downfalls of codebase semantic search; raw code does not encapsulate surrounding context or intent, but the descriptions do, making for a far more consistent semantic search.
 **Available Flags**:
 - `--filter`, `-f`: Filter results by struct type (e.g., `class`, `method`). Default is none (no filter)
 - `--top-k`, `-k`: Number of results to return. Default is `5`
