@@ -49,6 +49,25 @@ Tostr is designed to map the macro-architecture of your codebase. While all supp
 
 > **Note for AI Agents:** For languages where dependency tracking is marked "Coming Soon," the MCP server will cleanly omit the dependency fields. Agents should rely on `tostr skeleton` and semantic `search` to navigate these codebases.
 
+# 60 Second Quickstart
+Zero config required. Paste these into a terminal — shown for Claude Code; [other agents below](#connecting-the-mcp-to-your-agent).
+```
+pipx install tostr                          # Installing the CLI onto your PATH
+
+tostr add-agent claude --global             # Tells the agent to prefer Tostr for navigation
+claude mcp add tostr -- tostr start-mcp     # connect the MCP server
+
+cd path/to/project                          # Navigate to your project repository root
+
+tostr parse . --no-llm                      # build the local AST cache (no API key needed)
+
+tostr status .                              # confirm the parse succeeded
+
+# now explore from the CLI — or just ask your agent:
+tostr skeleton . --files-only
+tostr search "authentication" --filter class
+```
+For richer descriptions and sharper semantic search, add a `GEMINI_API_KEY` and drop `--no-llm` — see [Getting Started](#getting-started).
 
 # Getting Started
 
@@ -148,7 +167,7 @@ Below are instructions and links for setting up MCP servers in common AI coding 
 *   **Cline (VS Code)**: [Cline Documentation](https://docs.cline.bot/mcp/mcp-overview)
 *   **Codex**: [Codex Documentation](https://developers.openai.com/codex/mcp)
 
-### `tostr add-agent` — teach your agent to prefer Tostr
+### tostr add-agent — teach your agent to prefer Tostr
 
 Connecting the MCP server gives your agent the Tostr *tools*; it doesn't tell it *when* to reach for them over raw `read`/`grep`. `add-agent` installs that guidance into your agent's instructions file (`CLAUDE.md`, `.clinerules`, etc.) so the agent defaults to `skeleton`/`search`/`inspect` for code navigation.
 
@@ -201,7 +220,7 @@ This lays down the editable project files so you have something concrete to conf
 - `--force`, `-f`: Overwrite existing authored files (`tostr.toml`, `.tostrignore`) instead of leaving them untouched. Default is `False`
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
-### `tostr parse` — build the database
+### tostr parse — build the database
 
 ```
 tostr parse .
@@ -284,7 +303,7 @@ tostr inspect M-bc1cb7aeff --body .
 
 Beyond traversing the graph, Tostr provides a handful of commands for managing the database, keeping it in sync, and running the MCP server. Every command accepts an optional `path` argument (defaulting to the current directory `.`) pointing at the project root, and every command supports `--debug` / `--no-debug` (`-d` / `-nd`) to enable debug logging.
 
-### `tostr status`
+### tostr status
 Show whether Tostr has built a cache for a project, along with the database location, size, last-updated time, and per-type struct counts.
 ```
 tostr status .
@@ -292,7 +311,7 @@ tostr status .
 **Available Flags**:
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
-### `tostr watch`
+### tostr watch
 Watch the project for file changes and incrementally update the SQLite database as you save, add, or delete files. This runs in the foreground until interrupted (the MCP server performs the same incremental diffing automatically while running).
 ```
 tostr watch .
@@ -300,7 +319,7 @@ tostr watch .
 **Available Flags**:
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
-### `tostr clean`
+### tostr clean
 Remove the generated `.tostr/` cache (the AST and dependency graph), so `tostr parse` can rebuild from scratch or to reclaim space. Your authored config (`tostr.toml`, `.tostrignore`) is **preserved** — `clean && parse` returns to a fresh build with your settings intact. Pass `--purge` to also delete the authored config for a full reset.
 ```
 tostr clean .
@@ -309,7 +328,7 @@ tostr clean .
 - `--purge`: Also delete authored config (`tostr.toml`, `.tostrignore`), not just the generated `.tostr/` cache. Default is `False`
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
-### `tostr export`
+### tostr export
 Snapshot the project's LLM-generated descriptions into a committed `tostr.lock.json` so teammates can reuse them instead of re-calling the LLM. Run it after a `tostr parse` produces descriptions, then commit the lockfile alongside your code:
 ```
 tostr export .
@@ -322,7 +341,7 @@ The lockfile is **only** written by this command — `parse` reads it but never 
 - `--with-vectors`: Also export embedding vectors, not just descriptions. Off by default. Default is `False`
 - `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
 
-### `tostr start-mcp`
+### tostr start-mcp
 Start the bare MCP server, which then awaits agent initialization over the Model Context Protocol. This is the command referenced in the [MCP configuration](#connecting-the-mcp-to-your-agent) above; you generally won't run it manually, as your agent launches it for you.
 ```
 tostr start-mcp
