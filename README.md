@@ -134,6 +134,35 @@ Below are instructions and links for setting up MCP servers in common AI coding 
 *   **Cline (VS Code)**: [Cline Documentation](https://docs.cline.bot/mcp/mcp-overview)
 *   **Codex**: [Codex Documentation](https://developers.openai.com/codex/mcp)
 
+### `tostr add-agent` — teach your agent to prefer Tostr
+
+Connecting the MCP server gives your agent the Tostr *tools*; it doesn't tell it *when* to reach for them over raw `read`/`grep`. `add-agent` installs that guidance into your agent's instructions file (`CLAUDE.md`, `.clinerules`, etc.) so the agent defaults to `skeleton`/`search`/`inspect` for code navigation.
+
+```
+tostr add-agent claude        # install into ./CLAUDE.md
+tostr add-agent cursor        # install into ./.cursor/rules/tostr.mdc
+tostr add-agent all           # install into every supported agent
+tostr add-agent claude -g     # install into your global ~/.claude/CLAUDE.md instead
+tostr add-agent --list        # show supported agents and their config paths
+```
+
+Supported agents: `claude`, `cline`, `copilot`, `codex`, `cursor`.
+
+It is **safe to re-run and non-destructive**: the guidance is written between managed markers, so installing into a file that already has your own content just upserts that block and leaves everything else untouched (re-running an unchanged install is a no-op). Agents whose config is a dedicated file (Cursor's `tostr.mdc`) are written whole.
+
+To uninstall, use `tostr remove-agent` — it strips the managed block (deleting the file only if it becomes empty) or removes the dedicated file:
+
+```
+tostr remove-agent claude
+tostr remove-agent all
+```
+
+**Available Flags** (`add-agent`):
+- `--global`, `-g`: Install into the agent's global config instead of the current project. Only some agents have a global location (e.g. `claude`, `codex`). Default is `False`
+- `--force`, `-f`: Overwrite a dedicated agent file (e.g. Cursor's `tostr.mdc`) even if it isn't Tostr-managed. Default is `False`
+- `--list`, `-l`: List supported agents and where they install, then exit.
+- `--debug`, `--no-debug` / `-d`, `-nd`: Enable debug logging. Default is `False`
+
 ## Setting up Tostr
 
 Tostr separates **authoring configuration** from **building the cache**:

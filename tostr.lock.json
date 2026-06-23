@@ -2,7 +2,7 @@
   "cache_format_version": 1,
   "entries": {
     ".": {
-      "description": "Central architectural hub for a multi-language codebase analysis and semantic indexing engine, orchestrating AST-based parsing, persistent SQLite metadata management, and LLM-driven vector search through a modular pipeline of project traversal, language-specific abstraction, and state-consistent orchestration.",
+      "description": "The root directory acts as the primary workspace for the Tostr framework, housing the core source logic, project-specific resources, and configuration metadata. The src directory encapsulates the modular architecture, including AST-based parsing, graph-based persistence, and semantic processing engines, while auxiliary directories manage environment-specific skills and project-level assets to support automated codebase analysis and orchestration.",
       "diff_hash": ""
     },
     ".claude": {
@@ -30,20 +30,64 @@
       "diff_hash": ""
     },
     "src": {
-      "description": "The src/tostr directory serves as the central architectural hub for a multi-language codebase analysis and semantic indexing engine. It encapsulates a modular pipeline that integrates AST-based structural parsing, persistent SQLite metadata management, and LLM-driven vector search capabilities. The architecture is organized into distinct layers: a core engine for project traversal and dependency resolution, a language-specific abstraction layer for canonical AST mapping, a semantic processing layer for AI-driven inference, and a robust orchestration layer that manages state consistency, filesystem monitoring, and CLI/server interfaces.",
+      "description": "The Tostr core package serves as a modular framework for codebase analysis, semantic indexing, and AI-driven project orchestration. It integrates tree-sitter-based AST parsing with a graph-based persistence layer to maintain a synchronized, searchable representation of codebases. The architecture is structured into distinct layers: a CLI/Server interface for lifecycle management, a language-specific normalization layer for cross-reference consistency, a semantic processing engine for vector embeddings and LLM interactions, and a robust exception framework for diagnostic integrity. This design enables incremental analysis, efficient metadata generation, and consistent agent-based configuration management across complex, multi-language projects.",
       "diff_hash": ""
     },
     "src/tostr": {
-      "description": "The src/tostr directory serves as the central architectural hub for a multi-language codebase analysis and semantic indexing engine. It encapsulates a modular pipeline that integrates AST-based structural parsing, persistent SQLite metadata management, and LLM-driven vector search capabilities. The architecture is organized into distinct layers: a core engine for project traversal and dependency resolution, a language-specific abstraction layer for canonical AST mapping, a semantic processing layer for AI-driven inference, and a robust orchestration layer that manages state consistency, filesystem monitoring, and CLI/server interfaces.",
+      "description": "The Tostr core package serves as a modular framework for codebase analysis, semantic indexing, and AI-driven project orchestration. It integrates tree-sitter-based AST parsing with a graph-based persistence layer to maintain a synchronized, searchable representation of codebases. The architecture is structured into distinct layers: a CLI/Server interface for lifecycle management, a language-specific normalization layer for cross-reference consistency, a semantic processing engine for vector embeddings and LLM interactions, and a robust exception framework for diagnostic integrity. This design enables incremental analysis, efficient metadata generation, and consistent agent-based configuration management across complex, multi-language projects.",
       "diff_hash": ""
     },
     "src/tostr/__init__.py": {
       "description": "Empty File",
       "diff_hash": "aef716560cf10ba0b644cd49707e5ebd"
     },
+    "src/tostr/agents.py": {
+      "description": "Manages the lifecycle of AI agent configuration profiles, providing mechanisms to inject, update, and remove system-level guidance blocks within project files. It utilizes a template-driven approach to maintain consistent agent behavior across different file formats, ensuring non-destructive modifications to existing user content.",
+      "diff_hash": "b10a19709abc2d7609ddab6fb7fb4a1d"
+    },
+    "src/tostr/agents.py#AgentProfile": {
+      "description": "Represents the configuration schema for an AI agent's system prompt and behavioral rules, defining how agent-specific instructions are persisted and managed within a project or global environment.",
+      "diff_hash": "5f59decd364ceb5c132e7ca8e5126958"
+    },
+    "src/tostr/agents.py#_destination(...)": {
+      "description": "Resolves the absolute filesystem path for an agent configuration based on the profile, target directory, and requested scope.",
+      "diff_hash": "75639e763c1a9bfb42231930ff4c62c5"
+    },
+    "src/tostr/agents.py#_read_template(...)": {
+      "description": "Reads and returns the content of a specified template file from the internal tostr.templates package resource.",
+      "diff_hash": "9ddba534adce61da8bb6bceff8e5a6a4"
+    },
+    "src/tostr/agents.py#_render_body(...)": {
+      "description": "Generates the formatted agent guidance string by loading a template and applying format-specific wrappers such as MDC frontmatter.",
+      "diff_hash": "0e2c28bbb9081d5167d9367fbd76e307"
+    },
+    "src/tostr/agents.py#_resolve(...)": {
+      "description": "Retrieves an AgentProfile from the global registry by key, raising a TostrError if the key is unrecognized.",
+      "diff_hash": "b91a0a627476e2200f27f064e9fa0e20"
+    },
+    "src/tostr/agents.py#_strip_block(...)": {
+      "description": "Removes the Tostr-managed block from a string, preserving surrounding content and normalizing whitespace.",
+      "diff_hash": "3605d4276b4900b481959972fb689524"
+    },
+    "src/tostr/agents.py#_upsert_block(...)": {
+      "description": "Inserts or updates a Tostr-managed block within a string, ensuring the block is correctly delimited and surrounding text is preserved.",
+      "diff_hash": "a5f2dbabbd578dc4a56ec69d5e9c6bf7"
+    },
+    "src/tostr/agents.py#add_agent(...)": {
+      "description": "Installs or updates agent guidance into a target file, performing idempotent, non-destructive writes that preserve existing user content.",
+      "diff_hash": "4780eb2b1a6d6db7e04f25efcba7378c"
+    },
+    "src/tostr/agents.py#list_agents(...)": {
+      "description": "Returns a list of formatted strings summarizing all supported agents, their labels, target paths, and available installation scopes.",
+      "diff_hash": "398001e8ca87aa85ead8cbbf9943ab50"
+    },
+    "src/tostr/agents.py#remove_agent(...)": {
+      "description": "Uninstalls agent guidance by removing the managed block from shared files or deleting dedicated configuration files, returning a status report.",
+      "diff_hash": "dd1b8472960f50c2c44fd2c466976b8a"
+    },
     "src/tostr/cli.py": {
-      "description": "Provides the command-line interface for the Tostr project, orchestrating project indexing, semantic search, and structural inspection. It integrates file system monitoring, LLM-based code analysis, and SQLite database management to maintain a searchable representation of a codebase. The module utilizes Rich for terminal output and Typer for CLI command routing, supporting features like project scaffolding, dependency visualization, and incremental updates.",
-      "diff_hash": "6f1253f013ea24562d0a44d22222899d"
+      "description": "The CLI entry point for Tostr, providing a Typer-based interface for managing project indexing, semantic search, file watching, and agent-specific configuration. It orchestrates the lifecycle of the Tostr database, including initialization, parsing, exporting, and status reporting, while providing utilities for syntax highlighting and console-based inspection of code structures.",
+      "diff_hash": "352df97a31ea1b897271ad617ece2fcd"
     },
     "src/tostr/cli.py#TostrHighlighter": {
       "description": "A specialized syntax highlighter for the .tost human-readable format, extending RegexHighlighter to apply visual styling to UIDs, multi-line comments, structural line references, dependency edges, and section headers.",
@@ -69,6 +113,10 @@
       "description": "Trims the file path prefix from a code structure's UID, retaining only the '#member' identifier for classes and methods.",
       "diff_hash": "44463e32827db3ea364839083d324fb5"
     },
+    "src/tostr/cli.py#add_agent_cmd(...)": {
+      "description": "Registers Tostr guidance into specified AI agent configuration files (e.g., .clinerules) by upserting a managed block, supporting both project-local and global scopes.",
+      "diff_hash": "1680daf1da1254ebc9a77bd129b56d59"
+    },
     "src/tostr/cli.py#clean(...)": {
       "description": "Cleans the project by removing the generated .tostr/ cache, with an optional flag to purge configuration files.",
       "diff_hash": "222f66f0d36c6323d91e36b51ba54a10"
@@ -88,6 +136,10 @@
     "src/tostr/cli.py#parse(...)": {
       "description": "Parses the target project directory to build or update the SQLite database, managing embedding model initialization, progress tracking, and asynchronous execution of the parsing pipeline based on user-defined LLM and caching strategies.",
       "diff_hash": "e27918fb50265ca65d28274ed17381ee"
+    },
+    "src/tostr/cli.py#remove_agent_cmd(...)": {
+      "description": "Removes Tostr-managed guidance blocks from AI agent configuration files or deletes dedicated agent files, preserving user-defined content.",
+      "diff_hash": "ba0a09c29de63ceb3049bd9a906f5dda"
     },
     "src/tostr/cli.py#search(...)": {
       "description": "Performs a semantic search across the project by embedding the query and retrieving the top K matching code structures.",
@@ -186,7 +238,7 @@
       "diff_hash": "6888accb926431cdcbe0ffb068339d62"
     },
     "src/tostr/core": {
-      "description": "Core architectural engine for codebase analysis, indexing, and semantic representation. This layer implements the primary pipeline for project traversal, hierarchical AST reconstruction, and dependency resolution. It integrates persistent SQLite-based storage with vector search, manages language-specific provider factories, and orchestrates asynchronous LLM-driven documentation generation. The module provides a robust infrastructure for state tracking via diff-based lockfiles, cache versioning, and standardized serialization of structural metadata, ensuring consistent, performant, and observable analysis across diverse programming ecosystems.",
+      "description": "Core architectural layer for codebase analysis, indexing, and persistence. Orchestrates the lifecycle of project representation through a graph-based model, managing structural parsing, dependency resolution, and semantic metadata generation. Provides a unified infrastructure for SQLite-backed storage, multi-tier caching, and language-specific factory patterns, enabling efficient, incremental, and version-controlled analysis of complex codebases.",
       "diff_hash": ""
     },
     "src/tostr/core/__init__.py": {
@@ -314,7 +366,7 @@
       "diff_hash": "4c9ffacf7f3751b2e65a44e6bce08073"
     },
     "src/tostr/core/context": {
-      "description": "Centralizes project-wide configuration management, including metadata resolution and file-exclusion logic. It serves as the authoritative source for environment settings and language-specific ignore patterns, ensuring consistent context initialization across the application.",
+      "description": "Centralizes project-level configuration management and context initialization for the tostr utility. Orchestrates the resolution of language-specific ignore patterns and CLI overrides, providing a unified interface for mapping abstract identifiers to concrete file-filtering templates.",
       "diff_hash": ""
     },
     "src/tostr/core/context/__init__.py": {
@@ -958,7 +1010,7 @@
       "diff_hash": "51aeb2e98ef739d78016429970efb3bc"
     },
     "src/tostr/core/utils": {
-      "description": "Centralized utility layer providing observability and feedback mechanisms, including a unified logging infrastructure with Loguru integration for multi-context execution and thread-safe progress tracking via Rich for long-running asynchronous operations.",
+      "description": "Centralized utility layer providing observability and user feedback mechanisms, including a unified logging infrastructure with standard library interception and thread-safe progress tracking for long-running asynchronous tasks.",
       "diff_hash": ""
     },
     "src/tostr/core/utils/logger.py": {
@@ -1030,7 +1082,7 @@
       "diff_hash": "fbde97dd21133c3e2033655c9286d9ab"
     },
     "src/tostr/languages": {
-      "description": "Language-specific integration layer for the tostr framework, providing modular AST parsing, structural mapping, and canonical representation logic via tree-sitter. This directory encapsulates language-specific semantics, such as Java's inheritance and method overloading or Python's hierarchical structure, to ensure consistent cross-reference stability and UID generation across heterogeneous source codebases.",
+      "description": "Language-specific infrastructure for the tostr framework, providing modular implementations for Python and Java. Each module leverages tree-sitter for AST-based parsing, structural transformation, and canonical entity extraction. These components are responsible for normalizing language-specific semantics—such as inheritance, type resolution, and member discovery—to ensure stable UID generation and consistent cross-reference indexing across the codebase.",
       "diff_hash": ""
     },
     "src/tostr/languages/__init__.py": {
@@ -1038,7 +1090,7 @@
       "diff_hash": "5de1980dee48c44fc3e850f3a8b673f6"
     },
     "src/tostr/languages/java": {
-      "description": "Provides a specialized Java language integration for the tostr system, utilizing tree-sitter for AST parsing and structural transformation. It encapsulates logic for mapping Java source code into canonical representations, including classes, methods, and fields, while managing UID generation for cross-reference stability and handling language-specific semantics such as inheritance and method overloading.",
+      "description": "Java-specific language implementation for the tostr system, providing tree-sitter based parsing and structural transformation. Orchestrates the extraction of Java source code entities—including classes, enums, methods, and fields—into canonical, UID-stable representations. Manages language-specific semantics such as inheritance resolution, member discovery, and type normalization to support cross-reference stability and method overloading.",
       "diff_hash": ""
     },
     "src/tostr/languages/java/__init__.py": {
@@ -1118,7 +1170,7 @@
       "diff_hash": "8a882503accecc08c5a93ac2a77d9ffe"
     },
     "src/tostr/languages/python": {
-      "description": "Encapsulates Python-specific language support for the tostr framework, providing the logic for AST-based code analysis, tree-sitter query definitions, and hierarchical builder patterns required to map Python source structures into the project's internal representation.",
+      "description": "Encapsulates Python-specific language support for the tostr framework, providing the infrastructure for AST-based code analysis, structural transformation, and metadata extraction. It defines the core logic for parsing Python source code via tree-sitter, managing hierarchical code representations, and resolving cross-reference dependencies for downstream indexing and UID generation.",
       "diff_hash": ""
     },
     "src/tostr/languages/python/__init__.py": {
@@ -1190,11 +1242,11 @@
       "diff_hash": "5df02c621b06fdc44a323be4651671ee"
     },
     "src/tostr/semantic": {
-      "description": "Core semantic processing layer providing unified asynchronous interfaces for LLM-based text generation and high-throughput vector embedding extraction. Orchestrates model lifecycle, concurrency, and hardware-accelerated inference pipelines, abstracting provider-specific implementations for LLM orchestration and embedding generation to support extensible, modular AI-driven code analysis.",
+      "description": "Centralizes semantic processing capabilities, providing a unified abstraction layer for LLM interactions and high-performance vector embedding generation. The architecture decouples model-specific implementations from core business logic, facilitating scalable, asynchronous workflows for structured text generation, tokenization, and vector refinement through standardized interfaces and resilient execution patterns.",
       "diff_hash": ""
     },
     "src/tostr/semantic/embeddings": {
-      "description": "Implements a high-throughput, asynchronous framework for generating semantic vector embeddings from code structures. Orchestrates model lifecycle management, batch processing, and hardware-accelerated inference via ONNX Runtime, utilizing abstract interfaces to support extensible embedding strategies with integrated tokenization, pooling, and normalization pipelines.",
+      "description": "Orchestrates asynchronous text-to-vector embedding generation for code structures, providing an abstract base interface for strategy implementation and a high-performance ONNX-based provider. Manages model lifecycle, batch-processed tokenization, and vector refinement pipelines, including L2 normalization and thread-pool offloading for scalable semantic analysis.",
       "diff_hash": ""
     },
     "src/tostr/semantic/embeddings/__init__.py": {
@@ -1294,7 +1346,7 @@
       "diff_hash": "3323d95a43606b7342f64c89033a7850"
     },
     "src/tostr/semantic/llm": {
-      "description": "Centralizes the semantic layer's LLM integration strategies, providing a unified asynchronous interface for text generation. It defines a base abstraction for client orchestration, concurrency control, and structured output parsing, with concrete implementations for Ollama and Google Gemini providers.",
+      "description": "Provides a modular, asynchronous abstraction layer for LLM integration, standardizing interaction across multiple providers including Ollama and Google Gemini. The architecture enforces structured output via Pydantic models and implements resilient execution patterns, including concurrency control, rate limiting, and robust error handling for reliable text generation workflows.",
       "diff_hash": ""
     },
     "src/tostr/semantic/llm/__init__.py": {
@@ -1452,6 +1504,14 @@
     "src/tostr/server.py#skeleton(...)": {
       "description": "Generates a hierarchical text representation of the project's AST for a specified subpath, providing an architectural overview.",
       "diff_hash": "f554a2a7d05714accc52613049a90c9c"
+    },
+    "src/tostr/templates": {
+      "description": "Empty File",
+      "diff_hash": ""
+    },
+    "src/tostr/templates/__init__.py": {
+      "description": "Empty File",
+      "diff_hash": "a722bf52740f119781f2b6728529e550"
     }
   },
   "tostr_lock_version": 1

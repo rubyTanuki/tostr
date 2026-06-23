@@ -34,6 +34,9 @@ dependencies = [
 [project.scripts]
 tostr = "tostr.cli:app"
 
+[tool.setuptools.package-data]
+"tostr.templates" = ["*.md"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"

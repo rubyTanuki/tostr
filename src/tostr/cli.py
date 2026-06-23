@@ -23,6 +23,7 @@ from tostr.commands import (
     get_status,
     export_lockfile,
 )
+from tostr.agents import add_agent, remove_agent, list_agents, PROFILES
 
 from tostr.server import mcp
 
@@ -282,6 +283,106 @@ def init(
     for line in report:
         typer.echo(f"   {line}")
     typer.secho("✅ Scaffolded project. Edit tostr.toml / .tostrignore, then run 'tostr parse'.", fg="green")
+
+
+@app.command("add-agent")
+def add_agent_cmd(
+    agent: Annotated[
+        Union[str, None],
+        typer.Argument(
+            help="Agent to configure (e.g. claude, cline, cursor, copilot, codex), or 'all'."
+        )
+    ] = None,
+    path: Path = typer.Argument(
+        ".",
+        help="Project directory to install into (ignored with --global).",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+    global_: Annotated[
+        bool,
+        typer.Option("--global", "-g", help="Install into the agent's global config instead of this project.")
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Overwrite a dedicated agent file even if it isn't Tostr-managed.")
+    ] = False,
+    list_: Annotated[
+        bool,
+        typer.Option("--list", "-l", help="List supported agents and where they install.")
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option("--debug/--no-debug", "-d/-nd", help="Enable debug logging")
+    ] = False,
+):
+    """Install Tostr's 'prefer Tostr for code navigation' guidance into an agent's config
+    (CLAUDE.md, .clinerules, etc). Safe to re-run: it upserts a managed block and never
+    clobbers your own content."""
+    configure_cli_logging(debug)
+
+    if list_:
+        typer.secho("Supported agents:", bold=True)
+        for line in list_agents():
+            typer.echo(f"   {line}")
+        return
+    if agent is None:
+        typer.secho("❌ Error: specify an agent (or 'all'), or use --list.", fg="red", err=True)
+        raise typer.Exit(code=1)
+
+    scope = "global" if global_ else "project"
+    targets = list(PROFILES) if agent.lower() == "all" else [agent]
+    try:
+        report = [line for a in targets for line in add_agent(a, path, scope=scope, force=force)]
+    except TostrError as e:
+        typer.secho(f"❌ Error: {e}", fg="red", err=True)
+        raise typer.Exit(code=1)
+
+    for line in report:
+        typer.echo(f"   {line}")
+    typer.secho("✅ Agent config installed.", fg="green")
+
+
+@app.command("remove-agent")
+def remove_agent_cmd(
+    agent: Annotated[
+        str,
+        typer.Argument(help="Agent to remove (e.g. claude, cline, cursor, copilot, codex), or 'all'.")
+    ],
+    path: Path = typer.Argument(
+        ".",
+        help="Project directory to remove from (ignored with --global).",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+    global_: Annotated[
+        bool,
+        typer.Option("--global", "-g", help="Remove from the agent's global config instead of this project.")
+    ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option("--debug/--no-debug", "-d/-nd", help="Enable debug logging")
+    ] = False,
+):
+    """Remove Tostr's guidance from an agent's config — strips the managed block (keeping
+    your own content) or deletes the dedicated file."""
+    configure_cli_logging(debug)
+
+    scope = "global" if global_ else "project"
+    targets = list(PROFILES) if agent.lower() == "all" else [agent]
+    try:
+        report = [line for a in targets for line in remove_agent(a, path, scope=scope)]
+    except TostrError as e:
+        typer.secho(f"❌ Error: {e}", fg="red", err=True)
+        raise typer.Exit(code=1)
+
+    for line in report:
+        typer.echo(f"   {line}")
+    typer.secho("✅ Done.", fg="green")
 
 
 @app.command()
