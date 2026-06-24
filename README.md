@@ -87,6 +87,10 @@ Alternatively, you can install it via standard `pip`:
 ```bash
 pip install tostr
 ```
+or with `uv` for faster installation:
+```bash
+uv tool install tostr
+```
 
 If you wish to utilize tostr's struct descriptions, you will also need to configure a Google Gemini API key and save it as an environment variable. This is optional, as the embedding will just fall back to using code bodies and UIDs when a description isnt generated.
 
