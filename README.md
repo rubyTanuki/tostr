@@ -209,7 +209,7 @@ Tostr separates **authoring configuration** from **building the cache**:
 - **`.tostr/`** (hidden, gitignored) is generated and disposable. `tostr parse` rebuilds it from scratch; `tostr clean` removes it.
 - **`tostr.lock.json`** (project root, *generated-but-committed*) is an optional third category — the AST equivalent of a `package-lock.json`. You produce it with `tostr export`, commit it, and it lets a teammate's first `tostr parse` reuse your LLM-generated descriptions instead of paying to regenerate them. See [`tostr export`](#tostr-export) below.
 
-### `tostr init` — scaffold project files (optional)
+### tostr init — scaffold project files (optional)
 
 ```
 tostr init .
