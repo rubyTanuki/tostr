@@ -9,12 +9,17 @@ class LanguageProvider:
     language_map = {
         "java": ("tostr.languages.java.builders", "JavaBuilder", "tostr.core.resolver.JavaDependencyResolver"),
         "python": ("tostr.languages.python.builders", "PythonBuilder", "tostr.core.resolver.PythonDependencyResolver"),
+        # HTML is file-level only (no structs) and has no dependency resolution; the
+        # resolver slot points at the no-op base resolver.
+        "html": ("tostr.languages.html.builders", "HtmlBuilder", "tostr.core.resolver.BaseDependencyResolver"),
     }
 
     # Maps file extension to language key in language_map.
     extension_map = {
         ".java": "java",
         ".py": "python",
+        ".html": "html",
+        ".htm": "html",
     }
 
     @classmethod
