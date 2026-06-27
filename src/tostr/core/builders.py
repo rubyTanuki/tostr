@@ -62,6 +62,8 @@ class BaseFileBuilder(BaseStructBuilder):
             description=d.get("description", ""),
             imports=d.get("imports", []),
             body=d.get("body", ""),
+            start_line=d.get("start_line", 0),
+            end_line=d.get("end_line", 0),
             diff_hash=d.get("diff_hash", ""),
             package=d.get("package", ""),
             _inbound_dependency_strings=json.loads(d.get("inbound_dependency_strings", [])),

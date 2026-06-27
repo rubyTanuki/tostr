@@ -243,14 +243,22 @@ class BaseFile(BaseStruct):
     imports: List[str] = field(default_factory=list)
     package: str = ""
     body: str = ""
+    # Line bounds (1-indexed source lines, matching BaseCodeStruct). Duplicated here
+    # rather than inherited so a file can report its span without being a BaseCodeStruct —
+    # the same deliberate redundancy already used for `body`/`node`. Directories, which have
+    # no source extent, intentionally omit these.
+    start_line: int = 0
+    end_line: int = 0
     diff_hash: str = ""
     node: "Node" = None
-    
+
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["type"] = "file"
         data["imports"] = self.imports
         data["body"] = self.body
+        data["start_line"] = self.start_line
+        data["end_line"] = self.end_line
         data["diff_hash"] = self.diff_hash
         data["package"] = self.package
         return data
@@ -260,7 +268,7 @@ class BaseCodeStruct(BaseStruct):
     
     signature: str = ""         # public static int add(int num1, int num2) or class <T> Example extends BaseClass
     body: str = ""              # signature + method body or class body for hashing and LLM context
-    start_line: int = 0         
+    start_line: int = 0         # 1-indexed source line (matches editors/tracebacks), not the 0-indexed tree-sitter row
     end_line: int = 0
     node: Node = None         # Optional reference to the tree-sitter node for advanced processing (e.g., skeletonization)
     

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from tostr.core.models import BaseStruct, Directory, BaseFile, BaseClass, BaseMethod, BaseField
-from tostr.semantic.llm import CLASS_SYSTEM_INSTRUCTION, FILE_SYSTEM_INSTRUCTION, DIRECTORY_SYSTEM_INSTRUCTION
+from tostr.semantic.llm import CLASS_SYSTEM_INSTRUCTION, FILE_SYSTEM_INSTRUCTION, FILE_BODY_SYSTEM_INSTRUCTION, DIRECTORY_SYSTEM_INSTRUCTION
 
 if TYPE_CHECKING:
     from tostr.semantic.llm.base import LLMClient
@@ -166,9 +166,15 @@ class LLMDescriber(_DescriberBase):
             return
 
         if not file.all_children:
-            file.description = "Empty File"
-            self._advance(file, 'describe', 1)
-            self._advance(file, 'embed', 1)
+            # No extractable sub-components. For a file-level-only language (e.g. HTML) the
+            # file still carries a body, so describe it from that raw content rather than
+            # aggregating children. A genuinely empty file falls back to the "Empty File" tag.
+            if (file.body or "").strip():
+                await self._describe_file_from_body(file)
+            else:
+                file.description = "Empty File"
+                self._advance(file, 'describe', 1)
+                self._advance(file, 'embed', 1)
             return
 
         if len(file.all_children) == 1 and not isinstance(file.all_children[0], BaseMethod):
@@ -223,6 +229,31 @@ class LLMDescriber(_DescriberBase):
             self._advance(file, 'describe', missed)
             self._advance(file, 'embed', missed)
 
+        logger.debug(f"Successfully Generated Description for file {file.uid}")
+
+    async def _describe_file_from_body(self, file: BaseFile):
+        """Describe a childless file directly from its raw body (file-level-only languages
+        such as HTML). The normal _describe_file path aggregates child descriptions, which
+        yields nothing for a file with no extractable structs; here the body is the signal."""
+        logger.debug(f"Generating Description for file {file.uid} from body...")
+
+        class FileBodyDescriptionSchema(BaseModel):
+            description: str = Field(description="Description of the file")
+
+        response = await self.llm.generate_description(
+            input_data={"path": file.uid, "content": file.body},
+            system_prompt=FILE_BODY_SYSTEM_INSTRUCTION,
+            response_schema=FileBodyDescriptionSchema,
+        )
+
+        if not response:
+            logger.warning(f"⚠️ Skipping {file.uid} due to LLM failure")
+            self._advance(file, 'describe', 1)
+            self._advance(file, 'embed', 1)
+            return
+
+        file.description = response.description
+        self.embedder.enqueue(file)
         logger.debug(f"Successfully Generated Description for file {file.uid}")
 
     async def _describe_class(self, cls: BaseClass):

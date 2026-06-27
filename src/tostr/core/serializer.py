@@ -83,8 +83,6 @@ class tost:
         depth: int = 2, # recursion depth for children
         include_body: bool = False, 
     ) -> InspectResult:
-        is_code_struct = isinstance(obj, BaseCodeStruct)
-        
         result = InspectResult(
             id=obj.id,
             uid=obj.uid,
@@ -93,7 +91,9 @@ class tost:
             description=obj.description,
             inbound_edges=obj.inbound_dependency_strings,
             outbound_edges=obj.outbound_dependency_strings,
-            body=obj.body if include_body and is_code_struct else None,
+            # Code structs and files both carry a body; emit it on request. Directories
+            # have none, so the truthiness check keeps them out without special-casing.
+            body=getattr(obj, "body", None) if include_body else None,
             start_line=getattr(obj, 'start_line', 0),
             end_line=getattr(obj, 'end_line', 0),
             type=obj.__class__.__name__
