@@ -474,11 +474,13 @@ def _render_inspect(result: Union[InspectResult, str], pretty: bool = True, lang
     header_text = Text()
     header_text.append(result.id, style="tostr.uid")
     
-    if result.type in ["BaseClass", "BaseMethod", "BaseField"]:
+    if result.type in ["BaseClass", "BaseMethod", "BaseField", "BaseFile"]:
         line_info = f" @L{result.start_line}"
         if result.start_line != result.end_line:
             line_info += f"-{result.end_line}"
         header_text.append(line_info, style="tostr.line_num")
+
+    if result.type in ["BaseClass", "BaseMethod", "BaseField"]:
         header_text.append(f" | {result.signature}", style="bold white")
     else:
         header_text.append(f" | {result.uid}", style="tostr.uid")

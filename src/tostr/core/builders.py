@@ -8,6 +8,20 @@ from tostr.core.models import *
 
 if TYPE_CHECKING:
     from tostr.core.registry import Registry
+    from tree_sitter import Node
+
+
+def line_bounds(node: "Node") -> tuple[int, int]:
+    """A tree-sitter node's span as 1-indexed source lines, clamped to real content.
+
+    Rows are 0-indexed and `end_point` sits *after* the last byte, so a node ending in a
+    newline reports column 0 of the next (empty) row — `end_point[0]` then already equals the
+    1-indexed last content line (files). A node ending mid-line (code structs) needs `+ 1`.
+    """
+    end_row, end_col = node.end_point
+    end_line = end_row if (end_col == 0 and end_row > node.start_point[0]) else end_row + 1
+    return node.start_point[0] + 1, end_line
+
 
 class BaseBuilder(ABC):
     def __init__(self, registry: Registry):
@@ -62,6 +76,8 @@ class BaseFileBuilder(BaseStructBuilder):
             description=d.get("description", ""),
             imports=d.get("imports", []),
             body=d.get("body", ""),
+            start_line=d.get("start_line", 0),
+            end_line=d.get("end_line", 0),
             diff_hash=d.get("diff_hash", ""),
             package=d.get("package", ""),
             _inbound_dependency_strings=json.loads(d.get("inbound_dependency_strings", [])),

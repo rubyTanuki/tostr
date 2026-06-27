@@ -35,19 +35,20 @@ Using local ONNX (Open Neural Network Exchange) weights from the all-MiniLM-L6-v
 
 ## 🌍 Language Support Matrix
 
-Tostr is designed to map the macro-architecture of your codebase. While all supported languages receive high-density **Structural AST Skeletons** and **AI Semantic Descriptions**, multi-hop cross-file dependency resolution is currently optimized specifically for deep backend monoliths (Java). 
+Tostr is designed to map the macro-architecture of your codebase. Most supported languages receive high-density **Structural AST Skeletons** and **AI Semantic Descriptions**, while multi-hop cross-file dependency resolution is currently optimized specifically for deep backend monoliths (Java). Some formats (e.g. HTML) have no extractable sub-structures and are indexed at the **file level** — a single described, searchable node per file rather than a skeleton of classes and functions.
 
-| Language | Structural AST Parsing | AI Semantic Descriptions | Cross-File Dependency Graph |
-| :--- | :---: | :---: | :---: |
-| **☕ Java** | ✅ | ✅ | ✅ |
-| **🐍 Python** | ✅ | ✅ | ✅ |
-| **🔷 TypeScript** | 🚧 Coming Soon | 🚧 Coming Soon | 🚧 Coming Soon |
-| **🎯 C#** | 🚧 Coming Soon | 🚧 Coming Soon | 🚧 Coming Soon |
-| **🐹 Go** | 🚧 Coming Soon | 🚧 Coming Soon | 🚧 Coming Soon |
+| Language | Extensions | Structural AST Parsing | AI Semantic Descriptions | Cross-File Dependency Graph |
+| :--- | :--- | :---: | :---: | :---: |
+| **☕ Java** | `.java` | ✅ | ✅ | ✅ |
+| **🐍 Python** | `.py` | ✅ | ✅ | ✅ |
+| **🌐 HTML** | `.html`, `.htm` | 📄 File-level | ✅ | — |
+| **🔷 TypeScript / JavaScript** | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | 🚧 Coming Soon | 🚧 Coming Soon | 🚧 Coming Soon |
+| **🎯 C#** | `.cs` | 🚧 Coming Soon | 🚧 Coming Soon | 🚧 Coming Soon |
+| **🐹 Go** | `.go` | 🚧 Coming Soon | 🚧 Coming Soon | 🚧 Coming Soon |
 
 *Tostr is still in active development, so this list will quickly expand and grow with more language support. If you want to add support for your favorite language, you can also take a look at [CONTRIBUTING.md](https://github.com/rubyTanuki/tostr/blob/main/CONTRIBUTING.md) to help us out!*
 
-> **Note for AI Agents:** For languages where dependency tracking is marked "Coming Soon," the MCP server will cleanly omit the dependency fields. Agents should rely on `tostr skeleton` and semantic `search` to navigate these codebases.
+> **Note for AI Agents:** For languages where dependency tracking is marked "Coming Soon" (or "—" for file-level formats), the MCP server will cleanly omit the dependency fields. Agents should rely on `tostr skeleton` and semantic `search` to navigate these codebases.
 
 # 60 Second Quickstart
 Zero config required. Paste these into a terminal — shown for Claude Code; [other agents below](#connecting-the-mcp-to-your-agent).
@@ -233,7 +234,7 @@ This does the actual work: it parses the AST, resolves dependencies, generates d
 
 The `--language` flag overrides the configured language for this run only. If omitted, `parse` uses the `language` from `tostr.toml` (defaulting to `auto`, which parses every file with a supported extension and treats them all as valid dependency nodes). Choosing a specific language parses only that extension.
 
-> Tostr currently supports `.java` and `.py`, so the options for `--language` are `java` and `python`.
+> Tostr currently supports `.java`, `.py`, and `.html`/`.htm`, so the options for `--language` are `java`, `python`, and `html`.
 
 If you are running tostr on a project that already has an existing database but you want to reparse from the start, use the `--no-cache` flag.
 

@@ -6,7 +6,7 @@ import re
 
 from tostr.core.registry import Registry
 from tostr.languages.python.language import PYTHON_LANGUAGE
-from tostr.core.builders import BaseBuilder, BaseFileBuilder, BaseClassBuilder, BaseMethodBuilder, BaseFieldBuilder
+from tostr.core.builders import BaseBuilder, BaseFileBuilder, BaseClassBuilder, BaseMethodBuilder, BaseFieldBuilder, line_bounds
 from tostr.languages.python.queries import DEPENDENCY_QUERY
 from tostr.core.models import *
 
@@ -33,6 +33,7 @@ class PythonFileBuilder(BaseFileBuilder):
         parser = Parser(PYTHON_LANGUAGE)
         tree = parser.parse(body_bytes)
         file_obj.node = tree.root_node
+        file_obj.start_line, file_obj.end_line = line_bounds(tree.root_node)
 
         # UID stays the relative filepath (set by BaseFileBuilder.from_path) so all
         # children are prefix-matchable. The dotted module path is the *logical* name,
@@ -199,6 +200,7 @@ class PythonClassBuilder(BaseClassBuilder):
         else:
             uid = name
 
+        start_line, end_line = line_bounds(node)
         instance = BaseClass(
             name=name,
             uid=uid,
@@ -208,8 +210,8 @@ class PythonClassBuilder(BaseClassBuilder):
             signature=signature,
             body=body,
             diff_hash=hashlib.md5(node.text).hexdigest(),
-            start_line=node.start_point[0],
-            end_line=node.end_point[0],
+            start_line=start_line,
+            end_line=end_line,
             node=node,
             inherits=inherit_strings,
         )
@@ -289,6 +291,7 @@ class PythonMethodBuilder(BaseMethodBuilder):
                 # We'll mark is_creation=False and let resolver try both.
                 dependency_names.append((dep_name, dep_arity, receiver, False))
         
+        start_line, end_line = line_bounds(node)
         return BaseMethod(
             name=name,
             uid=uid,
@@ -298,8 +301,8 @@ class PythonMethodBuilder(BaseMethodBuilder):
             signature=signature,
             body=body,
             diff_hash=hashlib.md5(node.text).hexdigest(),
-            start_line=node.start_point[0],
-            end_line=node.end_point[0],
+            start_line=start_line,
+            end_line=end_line,
             node=node,
             arity=arity,
             dependency_names=dependency_names,
@@ -339,6 +342,7 @@ class PythonFieldBuilder(BaseFieldBuilder):
         else:
             uid = name
 
+        start_line, end_line = line_bounds(node)
         return BaseField(
             name=name,
             uid=uid,
@@ -348,8 +352,8 @@ class PythonFieldBuilder(BaseFieldBuilder):
             signature=signature,
             body=body,
             diff_hash=hashlib.md5(node.text).hexdigest(),
-            start_line=node.start_point[0],
-            end_line=node.end_point[0],
+            start_line=start_line,
+            end_line=end_line,
             node=node,
             field_type=field_type,
         )

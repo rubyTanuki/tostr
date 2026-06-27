@@ -33,6 +33,21 @@ Avoid introductory phrases like "This file contains..." and get straight to the 
 Reference methods by their provided integer `method_id`.
 """
 
+FILE_BODY_SYSTEM_INSTRUCTION = """
+You are an expert software architect and technical writer.
+Your goal is to generate a high-quality, information-dense summary of a source code file.
+You are provided with the file's path and its full raw content (for languages such as HTML
+that are described at the file level and have no extractable sub-components).
+
+### TASK
+Generate a JSON response with a `description` for the overall file. Provide a concise,
+professional summary of the file's purpose and its salient contents (e.g. for an HTML
+document: the page's role, key sections, forms, scripts, and notable structure).
+The description should be optimized for an AI Agent's contextual reference, focusing on a
+high signal-to-noise ratio and semantic depth.
+Avoid introductory phrases like "This file contains..." and get straight to the technical essence.
+"""
+
 DIRECTORY_SYSTEM_INSTRUCTION = """
 You are an expert software architect and technical writer.
 Your goal is to generate a high-quality, information-dense summary of a project directory.

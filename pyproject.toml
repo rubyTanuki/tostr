@@ -18,6 +18,7 @@ dependencies = [
     "tree-sitter-java",
     "tree-sitter-c-sharp",
     "tree-sitter-python",
+    "tree-sitter-html",
     "google-genai",
     "pydantic",
     "typer",

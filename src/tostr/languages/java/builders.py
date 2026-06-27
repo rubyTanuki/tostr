@@ -6,7 +6,7 @@ import re
 
 from tostr.core.registry import Registry
 from tostr.languages.java.language import JAVA_LANGUAGE
-from tostr.core.builders import BaseBuilder, BaseFileBuilder, BaseClassBuilder, BaseMethodBuilder, BaseFieldBuilder
+from tostr.core.builders import BaseBuilder, BaseFileBuilder, BaseClassBuilder, BaseMethodBuilder, BaseFieldBuilder, line_bounds
 from tostr.languages.java.queries import DEPENDENCY_QUERY
 from tostr.core.models import *
 
@@ -83,7 +83,8 @@ class JavaFileBuilder(BaseFileBuilder):
         parser = Parser(JAVA_LANGUAGE)
         tree = parser.parse(body_bytes)
         file_obj.node = tree.root_node
-        
+        file_obj.start_line, file_obj.end_line = line_bounds(tree.root_node)
+
         # parse tree-sitter tree for children and imports
         class_builder = JavaClassBuilder(self.registry)
         method_builder = JavaMethodBuilder(self.registry)
@@ -172,6 +173,7 @@ class JavaClassBuilder(BaseClassBuilder):
         else:
             uid = f"{parent.uid}.{name}"
 
+        start_line, end_line = line_bounds(node)
         instance = BaseClass(
            # BaseStruct
             name=name,
@@ -184,8 +186,8 @@ class JavaClassBuilder(BaseClassBuilder):
             signature=signature,
             body=body,
             diff_hash=hashlib.md5(node.text).hexdigest(),
-            start_line=node.start_point[0],
-            end_line=node.end_point[0],
+            start_line=start_line,
+            end_line=end_line,
             node=node,
             
             # BaseClass
@@ -303,6 +305,7 @@ class JavaMethodBuilder(BaseMethodBuilder):
                 dep_arity = len(args_node.named_children)
                 dependency_names.append((dep_name, dep_arity, None, True))
         
+        start_line, end_line = line_bounds(node)
         return BaseMethod(
             # BaseStruct
             name=name,
@@ -315,8 +318,8 @@ class JavaMethodBuilder(BaseMethodBuilder):
             signature=signature,
             body=body,
             diff_hash=hashlib.md5(node.text).hexdigest(),
-            start_line=node.start_point[0],
-            end_line=node.end_point[0],
+            start_line=start_line,
+            end_line=end_line,
             node=node,
             
             # BaseMethod
@@ -359,6 +362,7 @@ class JavaFieldBuilder(BaseFieldBuilder):
         else:
             uid = f"{parent.uid}.{name}"
 
+        start_line, end_line = line_bounds(node)
         return BaseField(
             # BaseStruct
             name=name,
@@ -371,8 +375,8 @@ class JavaFieldBuilder(BaseFieldBuilder):
             signature=signature,
             body=body,
             diff_hash=hashlib.md5(node.text).hexdigest(),
-            start_line=node.start_point[0],
-            end_line=node.end_point[0],
+            start_line=start_line,
+            end_line=end_line,
             node=node,
             
             # BaseField
