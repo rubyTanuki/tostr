@@ -112,9 +112,11 @@ sympy==1.14.0
 tenacity==9.1.4
 threadpoolctl==3.6.0
 tokenizers==0.22.2
+-e git+https://github.com/rubyTanuki/Toaster.git@2a17cad297f2930a750cfa6e9f5db7f4e8de93b3#egg=tostr
 tqdm==4.67.3
 tree-sitter==0.25.2
 tree-sitter-c-sharp==0.23.1
+tree-sitter-html==0.23.2
 tree-sitter-java==0.23.5
 tree-sitter-python==0.25.0
 twine==6.2.0
